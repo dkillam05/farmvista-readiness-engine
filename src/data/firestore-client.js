@@ -13,20 +13,6 @@ const LATEST = "field_readiness_latest";
 /* ================================
 HELPERS
 ================================ */
-function round(v, d = 2) {
-  const p = Math.pow(10, d);
-  return Math.round(Number(v) * p) / p;
-}
-
-function avg(arr) {
-  if (!arr.length) return 0;
-  return arr.reduce((a, b) => a + b, 0) / arr.length;
-}
-
-function sum(arr) {
-  return arr.reduce((a, b) => a + b, 0);
-}
-
 function getTodayISO() {
   return new Date().toISOString().slice(0, 10);
 }
@@ -62,7 +48,7 @@ async function getFields() {
 }
 
 /* ================================
-GET WEATHER (🔥 FULL FIX HERE)
+GET WEATHER (🔥 FINAL FIX)
 ================================ */
 async function getWeather(fieldId) {
   const snap = await db.collection(WEATHER).doc(fieldId).get();
@@ -77,14 +63,12 @@ async function getWeather(fieldId) {
   const today = getTodayISO();
 
   /* -------------------------------------------------------------
-  1. GET YESTERDAY (last full daily)
+  1. LAST 30 DAYS (DAILY)
   ------------------------------------------------------------- */
-  const yesterday = daily
-    .filter(d => d.dateISO < today)
-    .slice(-1);
+  const last30Daily = daily.slice(-30);
 
   /* -------------------------------------------------------------
-  2. GET TODAY HOURLY (THIS IS THE FIX)
+  2. TODAY HOURLY
   ------------------------------------------------------------- */
   const todayHourly = hourly
     .filter(h => h.time?.startsWith(today))
@@ -100,7 +84,7 @@ async function getWeather(fieldId) {
   /* -------------------------------------------------------------
   3. RETURN COMBINED
   ------------------------------------------------------------- */
-  return [...yesterday, ...todayHourly];
+  return [...last30Daily, ...todayHourly];
 }
 
 /* ================================
