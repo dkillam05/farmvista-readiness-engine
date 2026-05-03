@@ -1,7 +1,8 @@
 // run-batch.js
-// Runs readiness for ALL fields (clean replacement for your batch loop)
+// Runs readiness for ALL fields (WITH WEATHER REBUILD FIX)
 
 const { runField } = require("./run-field");
+const { buildWeatherCache } = require("./build-weather-cache");
 
 /* =========================================================================
 HELPERS
@@ -19,26 +20,13 @@ function chunkArray(arr, size) {
 MAIN BATCH RUNNER
 ========================================================================= */
 
-/**
- * runBatch
- *
- * @param {Object} deps
- * @param {Function} deps.getFields            → async () => fields[]
- * @param {Function} deps.getWeather           → async (fieldId) => weatherRows[]
- * @param {Function} deps.getLatest            → async (fieldId) => latestDoc
- * @param {Function} deps.writeResult          → async (result) => void
- *
- * @param {Object} opts
- * @param {number} opts.concurrency
- * @param {number} opts.soilWetnessDefault
- * @param {number} opts.drainageDefault
- */
 async function runBatch(deps, opts = {}) {
   const {
     getFields,
     getWeather,
     getLatest,
-    writeResult
+    writeResult,
+    saveWeatherCache   // 👈 NEW DEP (we will use this)
   } = deps;
 
   const {
@@ -63,7 +51,24 @@ async function runBatch(deps, opts = {}) {
       group.map(async (field) => {
         try {
           /* -------------------------------------------------------------
-          LOAD DATA
+          1. BUILD WEATHER (NEW FIX)
+          ------------------------------------------------------------- */
+
+          let weatherCache = null;
+
+          try {
+            weatherCache = await buildWeatherCache(field);
+
+            // Save if function provided
+            if (saveWeatherCache && weatherCache) {
+              await saveWeatherCache(field.id, weatherCache);
+            }
+          } catch (e) {
+            console.warn("[weather-build] failed:", field.id, e?.message || e);
+          }
+
+          /* -------------------------------------------------------------
+          2. LOAD DATA
           ------------------------------------------------------------- */
 
           const [weatherRows, latestDoc] = await Promise.all([
@@ -89,7 +94,7 @@ async function runBatch(deps, opts = {}) {
             : drainageDefault;
 
           /* -------------------------------------------------------------
-          RUN FIELD
+          3. RUN FIELD
           ------------------------------------------------------------- */
 
           const result = await runField({
@@ -106,7 +111,7 @@ async function runBatch(deps, opts = {}) {
           }
 
           /* -------------------------------------------------------------
-          WRITE RESULT
+          4. WRITE RESULT
           ------------------------------------------------------------- */
 
           await writeResult(result);
