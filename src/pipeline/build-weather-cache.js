@@ -34,7 +34,7 @@ function getPastDateISO(daysBack) {
 }
 
 /* ================================
-FETCH WEATHER (🔥 FIXED + SOIL)
+FETCH WEATHER (WITH SOIL)
 ================================ */
 async function fetchWeather(lat, lng) {
   const today = getTodayISO();
@@ -47,15 +47,13 @@ async function fetchWeather(lat, lng) {
     "relative_humidity_2m",
     "shortwave_radiation",
 
-    // ✅ ADD THESE
+    // SOIL
     "soil_temperature_0_to_7cm",
     "soil_moisture_0_to_7cm"
   ].join(",");
 
-  // HISTORICAL
   const histUrl = `${BASE_URL}?latitude=${lat}&longitude=${lng}&start_date=${start}&end_date=${today}&hourly=${hourlyFields}&timezone=auto`;
 
-  // FORECAST (today)
   const fcstUrl = `${FORECAST_URL}?latitude=${lat}&longitude=${lng}&hourly=${hourlyFields}&forecast_days=1&timezone=auto`;
 
   const [histRes, fcstRes] = await Promise.all([
@@ -79,7 +77,6 @@ async function fetchWeather(lat, lng) {
       relative_humidity_2m: [...hist.hourly.relative_humidity_2m, ...fcst.hourly.relative_humidity_2m],
       shortwave_radiation: [...hist.hourly.shortwave_radiation, ...fcst.hourly.shortwave_radiation],
 
-      // ✅ ADD THESE
       soil_temperature_0_to_7cm: [
         ...hist.hourly.soil_temperature_0_to_7cm,
         ...fcst.hourly.soil_temperature_0_to_7cm
@@ -93,7 +90,7 @@ async function fetchWeather(lat, lng) {
 }
 
 /* ================================
-BUILD HOURLY (🔥 ADD SOIL HERE)
+BUILD HOURLY (WITH SOIL)
 ================================ */
 function buildHourly(hourly) {
   const out = [];
@@ -104,19 +101,20 @@ function buildHourly(hourly) {
 
     out.push({
       time: hourly.time[i],
+
       tempF: Math.round((hourly.temperature_2m[i] * 9) / 5 + 32),
       rainIn: round((hourly.precipitation[i] || 0) / 25.4, 3),
       windMph: Math.round(hourly.wind_speed_10m[i] * 0.621371),
       rh: Math.round(hourly.relative_humidity_2m[i]),
       solarWm2: Math.round(hourly.shortwave_radiation[i] || 0),
 
-      // ✅ SOIL MOISTURE
+      // SOIL MOISTURE
       sm010: sm ?? null,
       sm010Pct: sm != null ? Math.round(sm * 100) : null,
       sm010Hours: sm != null ? 1 : 0,
       sm010Source: "0_7",
 
-      // ✅ SOIL TEMP
+      // SOIL TEMP
       st010C: stC ?? null,
       st010F: stC != null ? Math.round((stC * 9) / 5 + 32) : null,
       st010Hours: stC != null ? 1 : 0,
@@ -128,7 +126,7 @@ function buildHourly(hourly) {
 }
 
 /* ================================
-BUILD DAILY (unchanged)
+BUILD DAILY (NOW INCLUDES SOIL)
 ================================ */
 function buildDaily(hourlyRows) {
   const map = new Map();
@@ -143,7 +141,10 @@ function buildDaily(hourlyRows) {
         winds: [],
         rhs: [],
         solar: [],
-        rain: []
+        rain: [],
+
+        sm: [],
+        st: []
       });
     }
 
@@ -154,6 +155,9 @@ function buildDaily(hourlyRows) {
     d.rhs.push(h.rh);
     d.solar.push(h.solarWm2);
     d.rain.push(h.rainIn);
+
+    if (h.sm010 != null) d.sm.push(h.sm010);
+    if (h.st010F != null) d.st.push(h.st010F);
   }
 
   const out = [];
@@ -161,11 +165,22 @@ function buildDaily(hourlyRows) {
   for (const d of map.values()) {
     out.push({
       dateISO: d.dateISO,
+
       tempAvg: round(avg(d.temps), 1),
       windAvg: round(avg(d.winds), 1),
       rhAvg: round(avg(d.rhs), 1),
       solarAvg: round(avg(d.solar), 1),
-      rainTotal: round(sum(d.rain), 3)
+      rainTotal: round(sum(d.rain), 3),
+
+      // SOIL (FINAL OUTPUT)
+      sm010: d.sm.length ? round(avg(d.sm), 3) : null,
+      sm010Pct: d.sm.length ? Math.round(avg(d.sm) * 100) : null,
+      sm010Hours: d.sm.length,
+      sm010Source: "0_7",
+
+      st010F: d.st.length ? Math.round(avg(d.st)) : null,
+      st010Hours: d.st.length,
+      st010Source: "0_7"
     });
   }
 
@@ -194,6 +209,7 @@ async function buildWeatherCache(field) {
       lat: field.lat,
       lng: field.lng
     },
+
     dailySeries: dailyHistory,
     hourlySeries: hourlyToday
   };
