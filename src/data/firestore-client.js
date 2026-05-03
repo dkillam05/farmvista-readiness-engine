@@ -14,20 +14,26 @@ const LATEST = "field_readiness_latest";
 GET FIELDS
 ================================ */
 async function getFields() {
-  const snap = await db.collection(FIELDS).get();
+  const snap = await db.collection("fields").get();
 
   const out = [];
+
   snap.forEach(doc => {
     const d = doc.data() || {};
 
+    // skip inactive
     if (String(d.status || "").toLowerCase() === "inactive") return;
 
-    if (!d.lat || !d.lng) return;
+    // support BOTH formats
+    const lat = d.lat ?? d.location?.lat;
+    const lng = d.lng ?? d.location?.lng;
+
+    if (!Number.isFinite(Number(lat)) || !Number.isFinite(Number(lng))) return;
 
     out.push({
       id: doc.id,
-      lat: Number(d.lat),
-      lng: Number(d.lng),
+      lat: Number(lat),
+      lng: Number(lng),
       soilWetness: d.soilWetness,
       drainageIndex: d.drainageIndex
     });
