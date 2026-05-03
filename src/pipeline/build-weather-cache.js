@@ -3,7 +3,8 @@ const fetch = require("node-fetch");
 /* ================================
 CONFIG
 ================================ */
-const BASE_URL = "https://api.open-meteo.com/v1/forecast";
+const BASE_URL = "https://archive-api.open-meteo.com/v1/archive";
+const FORECAST_URL = "https://api.open-meteo.com/v1/forecast";
 
 /* ================================
 HELPERS
@@ -26,18 +27,47 @@ function getTodayISO() {
   return new Date().toISOString().slice(0, 10);
 }
 
+function getPastDateISO(daysBack) {
+  const d = new Date();
+  d.setDate(d.getDate() - daysBack);
+  return d.toISOString().slice(0, 10);
+}
+
 /* ================================
-FETCH WEATHER
+FETCH WEATHER (🔥 FIXED)
 ================================ */
 async function fetchWeather(lat, lng) {
-  const url = `${BASE_URL}?latitude=${lat}&longitude=${lng}&hourly=temperature_2m,precipitation,wind_speed_10m,relative_humidity_2m,shortwave_radiation&daily=temperature_2m_max,temperature_2m_min,precipitation_sum&forecast_days=10&timezone=auto`;
+  const today = getTodayISO();
+  const start = getPastDateISO(30);
 
-  const res = await fetch(url);
-  const data = await res.json();
+  // HISTORICAL (30 days)
+  const histUrl = `${BASE_URL}?latitude=${lat}&longitude=${lng}&start_date=${start}&end_date=${today}&hourly=temperature_2m,precipitation,wind_speed_10m,relative_humidity_2m,shortwave_radiation&timezone=auto`;
 
-  if (!res.ok) throw new Error("weather fetch failed");
+  // TODAY + FORECAST
+  const fcstUrl = `${FORECAST_URL}?latitude=${lat}&longitude=${lng}&hourly=temperature_2m,precipitation,wind_speed_10m,relative_humidity_2m,shortwave_radiation&forecast_days=1&timezone=auto`;
 
-  return data;
+  const [histRes, fcstRes] = await Promise.all([
+    fetch(histUrl),
+    fetch(fcstUrl)
+  ]);
+
+  const hist = await histRes.json();
+  const fcst = await fcstRes.json();
+
+  if (!histRes.ok || !fcstRes.ok) {
+    throw new Error("weather fetch failed");
+  }
+
+  return {
+    hourly: {
+      time: [...hist.hourly.time, ...fcst.hourly.time],
+      temperature_2m: [...hist.hourly.temperature_2m, ...fcst.hourly.temperature_2m],
+      precipitation: [...hist.hourly.precipitation, ...fcst.hourly.precipitation],
+      wind_speed_10m: [...hist.hourly.wind_speed_10m, ...fcst.hourly.wind_speed_10m],
+      relative_humidity_2m: [...hist.hourly.relative_humidity_2m, ...fcst.hourly.relative_humidity_2m],
+      shortwave_radiation: [...hist.hourly.shortwave_radiation, ...fcst.hourly.shortwave_radiation]
+    }
+  };
 }
 
 /* ================================
@@ -61,7 +91,7 @@ function buildHourly(hourly) {
 }
 
 /* ================================
-BUILD DAILY (from hourly)
+BUILD DAILY
 ================================ */
 function buildDaily(hourlyRows) {
   const map = new Map();
@@ -115,8 +145,8 @@ async function buildWeatherCache(field) {
 
   const today = getTodayISO();
 
-  // split
   const hourlyToday = hourlyRows.filter(h => h.time.startsWith(today));
+
   const dailyAll = buildDaily(hourlyRows);
 
   const dailyHistory = dailyAll.filter(d => d.dateISO < today);
@@ -127,11 +157,8 @@ async function buildWeatherCache(field) {
       lat: field.lat,
       lng: field.lng
     },
-
     dailySeries: dailyHistory,
-    hourlySeries: hourlyToday,
-
-    updatedAt: new Date().toISOString()
+    hourlySeries: hourlyToday
   };
 }
 
