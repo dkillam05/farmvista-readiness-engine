@@ -3,12 +3,14 @@ const router = express.Router();
 
 const { runBatch } = require("../pipeline/run-batch");
 const { runField } = require("../pipeline/run-field");
+const { buildWeatherCache } = require("../pipeline/build-weather-cache");
 
 const {
   getFields,
   getWeather,
   getLatest,
-  writeResult
+  writeResult,
+  saveWeatherCache   // 👈 ADD THIS
 } = require("../data/firestore-client");
 
 /* ================================
@@ -16,6 +18,29 @@ RUN FULL BATCH
 ================================ */
 router.get("/run", async (req, res) => {
   try {
+
+    /* -------------------------------------------------------------
+    1. BUILD WEATHER FOR ALL FIELDS (NEW)
+    ------------------------------------------------------------- */
+
+    const fields = await getFields();
+
+    for (const field of fields) {
+      try {
+        const weatherCache = await buildWeatherCache(field);
+
+        if (weatherCache) {
+          await saveWeatherCache(field.id, weatherCache);
+        }
+      } catch (e) {
+        console.warn("[weather-build] failed:", field.id, e?.message || e);
+      }
+    }
+
+    /* -------------------------------------------------------------
+    2. RUN READINESS
+    ------------------------------------------------------------- */
+
     const result = await runBatch(
       {
         getFields,
