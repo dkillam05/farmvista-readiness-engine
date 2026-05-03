@@ -34,7 +34,7 @@ function getPastDateISO(daysBack) {
 }
 
 /* ================================
-FETCH WEATHER (WITH SOIL)
+FETCH WEATHER (WITH SOIL + ET0)
 ================================ */
 async function fetchWeather(lat, lng) {
   const today = getTodayISO();
@@ -49,7 +49,10 @@ async function fetchWeather(lat, lng) {
 
     // SOIL
     "soil_temperature_0_to_7cm",
-    "soil_moisture_0_to_7cm"
+    "soil_moisture_0_to_7cm",
+
+    // ET0
+    "et0_fao_evapotranspiration"
   ].join(",");
 
   const histUrl = `${BASE_URL}?latitude=${lat}&longitude=${lng}&start_date=${start}&end_date=${today}&hourly=${hourlyFields}&timezone=auto`;
@@ -84,13 +87,18 @@ async function fetchWeather(lat, lng) {
       soil_moisture_0_to_7cm: [
         ...hist.hourly.soil_moisture_0_to_7cm,
         ...fcst.hourly.soil_moisture_0_to_7cm
+      ],
+
+      et0_fao_evapotranspiration: [
+        ...hist.hourly.et0_fao_evapotranspiration,
+        ...fcst.hourly.et0_fao_evapotranspiration
       ]
     }
   };
 }
 
 /* ================================
-BUILD HOURLY (WITH SOIL)
+BUILD HOURLY (WITH SOIL + ET0)
 ================================ */
 function buildHourly(hourly) {
   const out = [];
@@ -107,6 +115,9 @@ function buildHourly(hourly) {
       windMph: Math.round(hourly.wind_speed_10m[i] * 0.621371),
       rh: Math.round(hourly.relative_humidity_2m[i]),
       solarWm2: Math.round(hourly.shortwave_radiation[i] || 0),
+
+      // ET0 (mm → inches)
+      et0In: round((hourly.et0_fao_evapotranspiration?.[i] || 0) / 25.4, 3),
 
       // SOIL MOISTURE
       sm010: sm ?? null,
@@ -126,7 +137,7 @@ function buildHourly(hourly) {
 }
 
 /* ================================
-BUILD DAILY (NOW INCLUDES SOIL)
+BUILD DAILY (WITH ET0)
 ================================ */
 function buildDaily(hourlyRows) {
   const map = new Map();
@@ -142,7 +153,7 @@ function buildDaily(hourlyRows) {
         rhs: [],
         solar: [],
         rain: [],
-
+        et0: [],
         sm: [],
         st: []
       });
@@ -156,6 +167,7 @@ function buildDaily(hourlyRows) {
     d.solar.push(h.solarWm2);
     d.rain.push(h.rainIn);
 
+    if (h.et0In != null) d.et0.push(h.et0In);
     if (h.sm010 != null) d.sm.push(h.sm010);
     if (h.st010F != null) d.st.push(h.st010F);
   }
@@ -172,7 +184,10 @@ function buildDaily(hourlyRows) {
       solarAvg: round(avg(d.solar), 1),
       rainTotal: round(sum(d.rain), 3),
 
-      // SOIL (FINAL OUTPUT)
+      // ET0 (daily total)
+      et0In: d.et0.length ? round(sum(d.et0), 3) : 0,
+
+      // SOIL
       sm010: d.sm.length ? round(avg(d.sm), 3) : null,
       sm010Pct: d.sm.length ? Math.round(avg(d.sm) * 100) : null,
       sm010Hours: d.sm.length,
@@ -209,7 +224,6 @@ async function buildWeatherCache(field) {
       lat: field.lat,
       lng: field.lng
     },
-
     dailySeries: dailyHistory,
     hourlySeries: hourlyToday
   };
