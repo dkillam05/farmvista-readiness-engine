@@ -11,7 +11,7 @@ const WEATHER = "field_weather_cache";
 const LATEST = "field_readiness_latest";
 
 /* ================================
-HELPERS (small + safe)
+HELPERS
 ================================ */
 function round(v, d = 2) {
   const p = Math.pow(10, d);
@@ -62,7 +62,7 @@ async function getFields() {
 }
 
 /* ================================
-GET WEATHER (FIXED HERE)
+GET WEATHER
 ================================ */
 async function getWeather(fieldId) {
   const snap = await db.collection(WEATHER).doc(fieldId).get();
@@ -71,36 +71,27 @@ async function getWeather(fieldId) {
 
   const d = snap.data() || {};
 
-  // existing stored daily data
   let daily = Array.isArray(d.dailySeries) ? [...d.dailySeries] : [];
-
-  // hourly data (must exist for fix to work)
   const hourly = Array.isArray(d.hourlySeries) ? d.hourlySeries : [];
 
   if (!hourly.length) return daily;
 
   const today = getTodayISO();
 
-  // find all hourly rows for today
-  const todayRows = hourly.filter(r => r.dateISO?.startsWith(today));
+  const todayRows = hourly.filter(r => r.time?.startsWith(today));
 
   if (!todayRows.length) return daily;
 
-  // rebuild today's daily row
   const rebuiltToday = {
     dateISO: today,
-
     tempAvg: round(avg(todayRows.map(r => Number(r.tempF || 0))), 1),
     windAvg: round(avg(todayRows.map(r => Number(r.windMph || 0))), 1),
     rhAvg: round(avg(todayRows.map(r => Number(r.rh || 0))), 1),
     solarAvg: round(avg(todayRows.map(r => Number(r.solarWm2 || 0))), 1),
-
     rainTotal: round(sum(todayRows.map(r => Number(r.rainIn || 0))), 3),
-
     hoursUsed: todayRows.length
   };
 
-  // replace or insert today
   const idx = daily.findIndex(x => x.dateISO === today);
 
   if (idx >= 0) {
@@ -110,6 +101,16 @@ async function getWeather(fieldId) {
   }
 
   return daily;
+}
+
+/* ================================
+SAVE WEATHER (🔥 THIS WAS MISSING)
+================================ */
+async function saveWeatherCache(fieldId, data) {
+  await db.collection(WEATHER).doc(fieldId).set({
+    ...data,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp()
+  }, { merge: true });
 }
 
 /* ================================
@@ -145,5 +146,6 @@ module.exports = {
   getFields,
   getWeather,
   getLatest,
-  writeResult
+  writeResult,
+  saveWeatherCache   // 👈 REQUIRED
 };
