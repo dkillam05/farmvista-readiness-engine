@@ -62,7 +62,7 @@ async function getFields() {
 }
 
 /* ================================
-GET WEATHER
+GET WEATHER (🔥 FULL FIX HERE)
 ================================ */
 async function getWeather(fieldId) {
   const snap = await db.collection(WEATHER).doc(fieldId).get();
@@ -71,40 +71,40 @@ async function getWeather(fieldId) {
 
   const d = snap.data() || {};
 
-  let daily = Array.isArray(d.dailySeries) ? [...d.dailySeries] : [];
+  const daily = Array.isArray(d.dailySeries) ? d.dailySeries : [];
   const hourly = Array.isArray(d.hourlySeries) ? d.hourlySeries : [];
-
-  if (!hourly.length) return daily;
 
   const today = getTodayISO();
 
-  const todayRows = hourly.filter(r => r.time?.startsWith(today));
+  /* -------------------------------------------------------------
+  1. GET YESTERDAY (last full daily)
+  ------------------------------------------------------------- */
+  const yesterday = daily
+    .filter(d => d.dateISO < today)
+    .slice(-1);
 
-  if (!todayRows.length) return daily;
+  /* -------------------------------------------------------------
+  2. GET TODAY HOURLY (THIS IS THE FIX)
+  ------------------------------------------------------------- */
+  const todayHourly = hourly
+    .filter(h => h.time?.startsWith(today))
+    .map(h => ({
+      dateISO: h.time,
+      tempF: Number(h.tempF || 0),
+      windMph: Number(h.windMph || 0),
+      rh: Number(h.rh || 0),
+      solarWm2: Number(h.solarWm2 || 0),
+      rainIn: Number(h.rainIn || 0)
+    }));
 
-  const rebuiltToday = {
-    dateISO: today,
-    tempAvg: round(avg(todayRows.map(r => Number(r.tempF || 0))), 1),
-    windAvg: round(avg(todayRows.map(r => Number(r.windMph || 0))), 1),
-    rhAvg: round(avg(todayRows.map(r => Number(r.rh || 0))), 1),
-    solarAvg: round(avg(todayRows.map(r => Number(r.solarWm2 || 0))), 1),
-    rainTotal: round(sum(todayRows.map(r => Number(r.rainIn || 0))), 3),
-    hoursUsed: todayRows.length
-  };
-
-  const idx = daily.findIndex(x => x.dateISO === today);
-
-  if (idx >= 0) {
-    daily[idx] = rebuiltToday;
-  } else {
-    daily.push(rebuiltToday);
-  }
-
-  return daily;
+  /* -------------------------------------------------------------
+  3. RETURN COMBINED
+  ------------------------------------------------------------- */
+  return [...yesterday, ...todayHourly];
 }
 
 /* ================================
-SAVE WEATHER (🔥 THIS WAS MISSING)
+SAVE WEATHER
 ================================ */
 async function saveWeatherCache(fieldId, data) {
   await db.collection(WEATHER).doc(fieldId).set({
@@ -147,5 +147,5 @@ module.exports = {
   getWeather,
   getLatest,
   writeResult,
-  saveWeatherCache   // 👈 REQUIRED
+  saveWeatherCache
 };
