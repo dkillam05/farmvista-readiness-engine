@@ -1,5 +1,5 @@
 // FILE: /data/firestore-client.js
-// FIX: keep hourly for storage, but DO NOT mix into readiness input
+// FIX: clean daily data + safe fallback to hourly when daily is garbage
 
 const admin = require("firebase-admin");
 
@@ -51,7 +51,7 @@ async function getFields() {
 }
 
 /* ================================
-GET WEATHER (🔥 FIXED)
+GET WEATHER (🔥 REAL FIX HERE)
 ================================ */
 async function getWeather(fieldId) {
   const snap = await db.collection(WEATHER).doc(fieldId).get();
@@ -65,21 +65,39 @@ async function getWeather(fieldId) {
 
   const today = getTodayISO();
 
-  // ✅ KEEP DAILY CLEAN (this is what engine should use)
-  const last30Daily = daily.map(r => ({
-    dateISO: r.dateISO, // YYYY-MM-DD
-    tempF: Number(r.tempF || 0),
-    windMph: Number(r.windMph || 0),
-    rh: Number(r.rh || 0),
-    solarWm2: Number(r.solarWm2 || 0),
-    rainIn: Number(r.rainIn || 0)
-  })).slice(-30);
+  /* -------------------------------------------------
+  🔥 CLEAN DAILY (REMOVE ZERO / FAKE DAYS)
+  ------------------------------------------------- */
+  const cleanDaily = daily
+    .filter(r => {
+      // remove garbage days (your main issue)
+      return (
+        r &&
+        (
+          Number(r.tempF) > 0 ||
+          Number(r.rainIn) > 0 ||
+          Number(r.windMph) > 0 ||
+          Number(r.rh) > 0
+        )
+      );
+    })
+    .map(r => ({
+      dateISO: r.dateISO,
+      tempF: Number(r.tempF || 0),
+      windMph: Number(r.windMph || 0),
+      rh: Number(r.rh || 0),
+      solarWm2: Number(r.solarWm2 || 0),
+      rainIn: Number(r.rainIn || 0)
+    }))
+    .slice(-30);
 
-  // ⚠️ KEEP HOURLY SEPARATE (DO NOT MIX INTO DAILY)
+  /* -------------------------------------------------
+  HOURLY (TODAY ONLY — CLEAN)
+  ------------------------------------------------- */
   const todayHourly = hourly
     .filter(h => h.time?.startsWith(today))
     .map(h => ({
-      dateISO: h.time, // ISO timestamp (longer than 10 chars)
+      dateISO: h.time,
       tempF: Number(h.tempF || 0),
       windMph: Number(h.windMph || 0),
       rh: Number(h.rh || 0),
@@ -87,8 +105,28 @@ async function getWeather(fieldId) {
       rainIn: Number(h.rainIn || 0)
     }));
 
-  // 🔥 RETURN BOTH (run-field now filters correctly)
-  return [...last30Daily, ...todayHourly];
+  /* -------------------------------------------------
+  🔥 FALLBACK: if daily is garbage, use recent hourly
+  ------------------------------------------------- */
+  if (!cleanDaily.length) {
+    const fallbackHourly = hourly
+      .slice(-72) // last ~3 days
+      .map(h => ({
+        dateISO: h.time,
+        tempF: Number(h.tempF || 0),
+        windMph: Number(h.windMph || 0),
+        rh: Number(h.rh || 0),
+        solarWm2: Number(h.solarWm2 || 0),
+        rainIn: Number(h.rainIn || 0)
+      }));
+
+    return fallbackHourly;
+  }
+
+  /* -------------------------------------------------
+  NORMAL RETURN
+  ------------------------------------------------- */
+  return [...cleanDaily, ...todayHourly];
 }
 
 /* ================================
@@ -133,11 +171,11 @@ async function writeResult(result) {
     seedSource: result.seedSource,
     Smax: result.Smax,
 
-    // 🔥 REQUIRED FOR UI
+    // REQUIRED FOR UI
     asOfDateISO: todayISO,
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
 
-    // helpful debug
+    // debug
     mode: result.mode,
 
   }, { merge: true });
