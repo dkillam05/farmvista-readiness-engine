@@ -36,7 +36,7 @@ function getPastDateISO(daysBack) {
 }
 
 /* ================================
-FETCH WEATHER (HARD FAIL SAFE)
+FETCH WEATHER (🔥 FIXED FALLBACK)
 ================================ */
 async function fetchWeather(lat, lng) {
   const today = getTodayISO();
@@ -55,47 +55,66 @@ async function fetchWeather(lat, lng) {
 
   const histUrl = `${BASE_URL}?latitude=${lat}&longitude=${lng}&start_date=${start}&end_date=${today}&hourly=${hourlyFields}&timezone=auto`;
 
-  const fcstUrl = `${FORECAST_URL}?latitude=${lat}&longitude=${lng}&hourly=${hourlyFields}&forecast_days=1&timezone=auto`;
+  const fcstUrl = `${FORECAST_URL}?latitude=${lat}&longitude=${lng}&hourly=${hourlyFields}&forecast_days=2&timezone=auto`;
 
-  const [histRes, fcstRes] = await Promise.all([
-    fetch(histUrl),
-    fetch(fcstUrl)
-  ]);
+  let hist = null;
+  let fcst = null;
 
-  if (!histRes.ok) {
-    throw new Error("archive weather fetch failed");
+  /* -------------------------------
+     TRY ARCHIVE (DON’T FAIL RUN)
+  ------------------------------- */
+  try {
+    const histRes = await fetch(histUrl);
+
+    if (histRes.ok) {
+      hist = await histRes.json();
+    } else {
+      console.warn("[weather] archive bad response");
+    }
+  } catch (e) {
+    console.warn("[weather] archive failed:", e?.message || e);
   }
 
-  if (!fcstRes.ok) {
+  /* -------------------------------
+     FORECAST (REQUIRED)
+  ------------------------------- */
+  try {
+    const fcstRes = await fetch(fcstUrl);
+
+    if (!fcstRes.ok) {
+      throw new Error("forecast weather fetch failed");
+    }
+
+    fcst = await fcstRes.json();
+  } catch (e) {
     throw new Error("forecast weather fetch failed");
   }
 
-  const hist = await histRes.json();
-  const fcst = await fcstRes.json();
-
-  if (!hist?.hourly || !fcst?.hourly) {
-    throw new Error("weather data missing hourly");
-  }
+  /* -------------------------------
+     MERGE SAFELY
+  ------------------------------- */
+  const histHourly = hist?.hourly || {};
+  const fcstHourly = fcst?.hourly || {};
 
   return {
     hourly: {
-      time: [...hist.hourly.time, ...fcst.hourly.time],
-      temperature_2m: [...hist.hourly.temperature_2m, ...fcst.hourly.temperature_2m],
-      precipitation: [...hist.hourly.precipitation, ...fcst.hourly.precipitation],
-      wind_speed_10m: [...hist.hourly.wind_speed_10m, ...fcst.hourly.wind_speed_10m],
-      relative_humidity_2m: [...hist.hourly.relative_humidity_2m, ...fcst.hourly.relative_humidity_2m],
-      shortwave_radiation: [...hist.hourly.shortwave_radiation, ...fcst.hourly.shortwave_radiation],
+      time: [...(histHourly.time || []), ...(fcstHourly.time || [])],
+      temperature_2m: [...(histHourly.temperature_2m || []), ...(fcstHourly.temperature_2m || [])],
+      precipitation: [...(histHourly.precipitation || []), ...(fcstHourly.precipitation || [])],
+      wind_speed_10m: [...(histHourly.wind_speed_10m || []), ...(fcstHourly.wind_speed_10m || [])],
+      relative_humidity_2m: [...(histHourly.relative_humidity_2m || []), ...(fcstHourly.relative_humidity_2m || [])],
+      shortwave_radiation: [...(histHourly.shortwave_radiation || []), ...(fcstHourly.shortwave_radiation || [])],
       soil_temperature_0_to_7cm: [
-        ...hist.hourly.soil_temperature_0_to_7cm,
-        ...fcst.hourly.soil_temperature_0_to_7cm
+        ...(histHourly.soil_temperature_0_to_7cm || []),
+        ...(fcstHourly.soil_temperature_0_to_7cm || [])
       ],
       soil_moisture_0_to_7cm: [
-        ...hist.hourly.soil_moisture_0_to_7cm,
-        ...fcst.hourly.soil_moisture_0_to_7cm
+        ...(histHourly.soil_moisture_0_to_7cm || []),
+        ...(fcstHourly.soil_moisture_0_to_7cm || [])
       ],
       et0_fao_evapotranspiration: [
-        ...hist.hourly.et0_fao_evapotranspiration,
-        ...fcst.hourly.et0_fao_evapotranspiration
+        ...(histHourly.et0_fao_evapotranspiration || []),
+        ...(fcstHourly.et0_fao_evapotranspiration || [])
       ]
     }
   };
@@ -114,7 +133,7 @@ function buildHourly(hourly) {
     const tempC = hourly.temperature_2m?.[i];
     const rainMM = hourly.precipitation?.[i];
 
-    // 🔥 CRITICAL: skip completely invalid rows
+    // 🔥 skip junk rows
     if (tempC == null && rainMM == null) continue;
 
     const stC = hourly.soil_temperature_0_to_7cm?.[i];
@@ -182,11 +201,10 @@ function buildDaily(hourlyRows) {
 
   for (const d of map.values()) {
 
-    // 🔥 CRITICAL: skip garbage days
     const hasData =
       d.temps.length ||
       d.rain.length ||
-      d.wind.length ||
+      d.winds.length ||
       d.rhs.length;
 
     if (!hasData) continue;
