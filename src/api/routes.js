@@ -19,13 +19,15 @@ RUN FULL BATCH
 router.get("/run", async (req, res) => {
   try {
 
-    // ✅ NEW: REBUILD FLAG
+    // ✅ REBUILD FLAG
     const rebuild = req.query.rebuild === "1";
 
     /* -------------------------------------------------------------
-    1. BUILD WEATHER FOR ALL FIELDS
+    1. BUILD WEATHER FOR ALL FIELDS (🔥 SAFE MODE)
     ------------------------------------------------------------- */
     const fields = await getFields();
+
+    let weatherBuildFailCount = 0;
 
     for (const field of fields) {
       try {
@@ -33,14 +35,21 @@ router.get("/run", async (req, res) => {
 
         if (weatherCache) {
           await saveWeatherCache(field.id, weatherCache);
+        } else {
+          weatherBuildFailCount++;
+          console.warn("[weather-build] empty result:", field.id);
         }
+
       } catch (e) {
+        weatherBuildFailCount++;
         console.warn("[weather-build] failed:", field.id, e?.message || e);
       }
     }
 
+    console.log(`[weather-build] completed with ${weatherBuildFailCount} failures`);
+
     /* -------------------------------------------------------------
-    2. RUN READINESS
+    2. RUN READINESS (🔥 NEVER BLOCKED BY WEATHER FAILURE)
     ------------------------------------------------------------- */
 
     const result = await runBatch(
@@ -52,13 +61,14 @@ router.get("/run", async (req, res) => {
       },
       {
         concurrency: 6,
-        rebuild // 👈 PASS IT DOWN
+        rebuild
       }
     );
 
     res.json({
       ok: true,
       rebuild,
+      weatherBuildFailures: weatherBuildFailCount,
       ...result
     });
 
@@ -76,7 +86,7 @@ RUN SINGLE FIELD (DEBUG)
 router.get("/field", async (req, res) => {
   try {
     const fieldId = req.query.fieldId;
-    const rebuild = req.query.rebuild === "1"; // 👈 ADD
+    const rebuild = req.query.rebuild === "1";
 
     if (!fieldId) {
       return res.status(400).json({
@@ -103,9 +113,10 @@ router.get("/field", async (req, res) => {
     const result = await runField({
       field,
       weatherRows,
-      latestDoc: rebuild ? null : latestDoc, // 🔥 FORCE REBUILD HERE
+      latestDoc: rebuild ? null : latestDoc,
       soilWetness: field.soilWetness,
-      drainageIndex: field.drainageIndex
+      drainageIndex: field.drainageIndex,
+      rebuild // 🔥 PASS IT THROUGH CORRECTLY
     });
 
     res.json({
