@@ -33,11 +33,14 @@ function buildWeatherWindow(weatherRows, latestDoc, mode) {
     return weatherRows;
   }
 
-  // EXISTING FIELD → ONLY RECENT WINDOW
-  // We only want yesterday + today (rolling behavior)
-  const last2Days = weatherRows.slice(-2);
+  // 🔥 FIX: use last 3 days instead of 2
+  // Ensures:
+  // - today is always included (even if partial)
+  // - avoids ordering/timing issues
+  // - gives buffer for MRMS lag
+  const last3Days = weatherRows.slice(-3);
 
-  return last2Days;
+  return last3Days;
 }
 
 /* =========================================================================
@@ -93,7 +96,9 @@ async function runField({
 
   if (mode === "rolling" && latestDoc) {
     previousState = {
-      storageFinal: Number(latestDoc.storageFinal)
+      storageFinal: Number(latestDoc.storageFinal),
+      // 🔥 FIX: carry forward surface state too
+      surfaceFinal: Number(latestDoc.surfaceFinal || 0)
     };
   }
 
