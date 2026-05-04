@@ -1,30 +1,46 @@
 // FILE: /core/readiness-engine.js
-// FIXED: STORAGE-DRIVEN READINESS (no more fake 100s)
+// FIXED: hourly rows no longer dry like full daily rows
 
 function clamp(n, lo, hi) {
-  return Math.max(lo, Math.min(hi, Number(n)));
+  const v = Number(n);
+  if (!Number.isFinite(v)) return lo;
+  return Math.max(lo, Math.min(hi, v));
 }
 
 function round(v, d = 2) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return 0;
   const p = Math.pow(10, d);
-  return Math.round(Number(v) * p) / p;
+  return Math.round(n * p) / p;
+}
+
+function isHourlyRow(row) {
+  return typeof row?.dateISO === "string" && row.dateISO.length > 10;
+}
+
+function pickNumber(...vals) {
+  for (const v of vals) {
+    const n = Number(v);
+    if (Number.isFinite(n)) return n;
+  }
+  return 0;
 }
 
 /* =========================================================================
 DRYING POWER
 ========================================================================= */
 function calcDryPower(row) {
-  const temp = Number(row.tempF || 0);
-  const wind = Number(row.windMph || 0);
-  const solar = Number(row.solarWm2 || 0);
-  const rh = Number(row.rh || 0);
+  const temp = pickNumber(row.tempF, row.tempAvg, row.temp);
+  const wind = pickNumber(row.windMph, row.windAvg, row.wind);
+  const solar = pickNumber(row.solarWm2, row.solarAvg, row.solar);
+  const rh = pickNumber(row.rh, row.rhAvg);
 
   const tempN = clamp((temp - 30) / 50, 0, 1);
   const windN = clamp(wind / 20, 0, 1);
   const solarN = clamp(solar / 300, 0, 1);
   const rhN = clamp((rh - 30) / 70, 0, 1);
 
-  let dry =
+  const dry =
     (0.35 * tempN) +
     (0.30 * solarN) +
     (0.20 * windN) -
@@ -48,9 +64,11 @@ function effectiveRain(rain, storage, Smax) {
 /* =========================================================================
 SURFACE WETNESS
 ========================================================================= */
-function surfaceUpdate(surface, rain, dry) {
+function surfaceUpdate(surface, rain, dry, stepFactor) {
   surface += rain * 2.8;
-  surface -= (0.015 + dry * 0.18);
+
+  // daily rows use full drying; hourly rows use 1/24 drying
+  surface -= (0.015 + dry * 0.18) * stepFactor;
 
   return clamp(surface, 0, 1.2);
 }
@@ -58,29 +76,25 @@ function surfaceUpdate(surface, rain, dry) {
 /* =========================================================================
 STORAGE UPDATE
 ========================================================================= */
-function storageUpdate(storage, rainEff, dry, Smax) {
+function storageUpdate(storage, rainEff, dry, Smax, stepFactor) {
   storage += rainEff;
 
-  const loss = (0.02 + dry * 0.15);
+  // daily rows use full drying; hourly rows use 1/24 drying
+  const loss = (0.02 + dry * 0.15) * stepFactor;
   storage -= loss;
 
   return clamp(storage, 0, Smax);
 }
 
 /* =========================================================================
-READINESS (🔥 HARD FIX)
+READINESS
 ========================================================================= */
 function calcReadiness(storage, surface, Smax) {
-
   const storageFrac = clamp(storage / Smax, 0, 1);
 
-  // 🔥 HARD LINEAR DROP (THIS FIXES YOUR ISSUE)
   let readiness = 100 * (1 - storageFrac);
-
-  // 🔥 STRONG NONLINEAR PUNISHMENT WHEN WET
   readiness *= (1 - Math.pow(storageFrac, 1.3));
 
-  // 🔥 SURFACE PENALTY (but not dominant)
   const surfaceFrac = clamp(surface / 1.2, 0, 1);
   const surfacePenalty = surfaceFrac * 50;
 
@@ -103,7 +117,7 @@ function runReadinessEngine({
   }
 
   const Smax = clamp(
-    3 + (soilWetness / 100) + (drainageIndex / 100),
+    3 + (Number(soilWetness || 60) / 100) + (Number(drainageIndex || 45) / 100),
     3,
     5
   );
@@ -137,20 +151,31 @@ function runReadinessEngine({
   const trace = [];
 
   for (const row of weatherRows) {
-    const rain = Number(row.rainIn || 0);
-    const dry = calcDryPower(row);
+    const hourly = isHourlyRow(row);
 
+    // Daily row = full day. Hourly row = 1/24 day.
+    const stepFactor = hourly ? (1 / 24) : 1;
+
+    const rain = pickNumber(
+      row.rainIn,
+      row.rainTotal,
+      row.rainInAdj
+    );
+
+    const dry = calcDryPower(row);
     const rainEff = effectiveRain(rain, storage, Smax);
 
-    surface = surfaceUpdate(surface, rain, dry);
-    storage = storageUpdate(storage, rainEff, dry, Smax);
+    surface = surfaceUpdate(surface, rain, dry, stepFactor);
+    storage = storageUpdate(storage, rainEff, dry, Smax, stepFactor);
 
     const readiness = calcReadiness(storage, surface, Smax);
 
     trace.push({
       dateISO: row.dateISO,
-      rain,
-      dry,
+      rowType: hourly ? "hourly" : "daily",
+      stepFactor: round(stepFactor, 4),
+      rain: round(rain, 4),
+      dry: round(dry, 4),
       storage: round(storage, 4),
       surface: round(surface, 4),
       readiness: round(readiness, 1)
