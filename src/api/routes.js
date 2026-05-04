@@ -10,7 +10,7 @@ const {
   getWeather,
   getLatest,
   writeResult,
-  saveWeatherCache   // 👈 ADD THIS
+  saveWeatherCache
 } = require("../data/firestore-client");
 
 /* ================================
@@ -19,10 +19,12 @@ RUN FULL BATCH
 router.get("/run", async (req, res) => {
   try {
 
-    /* -------------------------------------------------------------
-    1. BUILD WEATHER FOR ALL FIELDS (NEW)
-    ------------------------------------------------------------- */
+    // ✅ NEW: REBUILD FLAG
+    const rebuild = req.query.rebuild === "1";
 
+    /* -------------------------------------------------------------
+    1. BUILD WEATHER FOR ALL FIELDS
+    ------------------------------------------------------------- */
     const fields = await getFields();
 
     for (const field of fields) {
@@ -49,12 +51,14 @@ router.get("/run", async (req, res) => {
         writeResult
       },
       {
-        concurrency: 6
+        concurrency: 6,
+        rebuild // 👈 PASS IT DOWN
       }
     );
 
     res.json({
       ok: true,
+      rebuild,
       ...result
     });
 
@@ -72,6 +76,7 @@ RUN SINGLE FIELD (DEBUG)
 router.get("/field", async (req, res) => {
   try {
     const fieldId = req.query.fieldId;
+    const rebuild = req.query.rebuild === "1"; // 👈 ADD
 
     if (!fieldId) {
       return res.status(400).json({
@@ -98,13 +103,14 @@ router.get("/field", async (req, res) => {
     const result = await runField({
       field,
       weatherRows,
-      latestDoc,
+      latestDoc: rebuild ? null : latestDoc, // 🔥 FORCE REBUILD HERE
       soilWetness: field.soilWetness,
       drainageIndex: field.drainageIndex
     });
 
     res.json({
       ok: true,
+      rebuild,
       field,
       weatherCount: weatherRows.length,
       latestDoc,
