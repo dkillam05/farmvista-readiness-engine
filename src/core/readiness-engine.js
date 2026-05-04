@@ -1,6 +1,6 @@
 // readiness-engine.js
 // PURE FIELD READINESS ENGINE (NO FIRESTORE, NO API)
-// Tuned for realistic wet-field behavior
+// Tuned for realistic wet-field behavior + REBUILD SUPPORT
 
 function clamp(n, lo, hi) {
   return Math.max(lo, Math.min(hi, Number(n)));
@@ -52,10 +52,10 @@ function effectiveRain(rain, storage, Smax) {
 SURFACE WETNESS (TUNED)
 ========================================================================= */
 function surfaceUpdate(surface, rain, dry) {
-  // 🔥 Stronger rain impact
+  // stronger rain impact
   surface += rain * 2.8;
 
-  // 🔥 Slower drying (keeps field wet longer)
+  // slower drying
   surface -= (0.015 + dry * 0.18);
 
   return clamp(surface, 0, 1.2);
@@ -81,7 +81,7 @@ function calcReadiness(storage, surface, Smax) {
 
   let readiness = 100 * (1 - storageFrac);
 
-  // 🔥 Stronger surface penalty
+  // stronger surface penalty
   const surfaceFrac = clamp(surface / 1.2, 0, 1);
   const surfacePenalty = Math.pow(surfaceFrac, 0.7) * 85;
 
@@ -113,16 +113,29 @@ function runReadinessEngine({
   let surface;
   let seedSource;
 
-  if (previousState && Number.isFinite(Number(previousState.storageFinal))) {
+  /* ============================================================
+     🔥 NEW: REBUILD / REWIND SUPPORT
+  ============================================================ */
+  const forceRebuild = !!(previousState && previousState.forceRebuild);
+
+  if (forceRebuild) {
+    // FULL 30-day rebuild from weather only
+    storage = 0.10 * Smax;
+    surface = 0;
+    seedSource = "rewind";
+  }
+  else if (previousState && Number.isFinite(Number(previousState.storageFinal))) {
+    // normal rolling behavior
     storage = clamp(Number(previousState.storageFinal), 0, Smax);
 
-    // carry forward surface state
     surface = Number.isFinite(Number(previousState.surfaceFinal))
       ? clamp(Number(previousState.surfaceFinal), 0, 1.2)
       : 0;
 
     seedSource = "latest";
-  } else {
+  }
+  else {
+    // new field baseline
     storage = 0.10 * Smax;
     surface = 0;
     seedSource = "baseline";
