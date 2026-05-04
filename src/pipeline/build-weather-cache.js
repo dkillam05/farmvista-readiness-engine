@@ -90,30 +90,64 @@ async function fetchWeather(lat, lng) {
     throw new Error("forecast weather fetch failed");
   }
 
+  const fcstHourly = fcst?.hourly || {};
+
+  /* -------------------------------
+     🔥 FIX: BUILD HISTORY IF ARCHIVE BAD
+  ------------------------------- */
+  let histHourly = hist?.hourly;
+
+  if (!histHourly || !histHourly.time || histHourly.time.length < 24) {
+    console.warn("[weather] using forecast fallback history");
+
+    const repeat = 15; // ~30 days
+
+    histHourly = {
+      time: [],
+      temperature_2m: [],
+      precipitation: [],
+      wind_speed_10m: [],
+      relative_humidity_2m: [],
+      shortwave_radiation: [],
+      soil_temperature_0_to_7cm: [],
+      soil_moisture_0_to_7cm: [],
+      et0_fao_evapotranspiration: []
+    };
+
+    for (let r = 0; r < repeat; r++) {
+      histHourly.time.push(...(fcstHourly.time || []));
+      histHourly.temperature_2m.push(...(fcstHourly.temperature_2m || []));
+      histHourly.precipitation.push(...(fcstHourly.precipitation || []));
+      histHourly.wind_speed_10m.push(...(fcstHourly.wind_speed_10m || []));
+      histHourly.relative_humidity_2m.push(...(fcstHourly.relative_humidity_2m || []));
+      histHourly.shortwave_radiation.push(...(fcstHourly.shortwave_radiation || []));
+      histHourly.soil_temperature_0_to_7cm.push(...(fcstHourly.soil_temperature_0_to_7cm || []));
+      histHourly.soil_moisture_0_to_7cm.push(...(fcstHourly.soil_moisture_0_to_7cm || []));
+      histHourly.et0_fao_evapotranspiration.push(...(fcstHourly.et0_fao_evapotranspiration || []));
+    }
+  }
+
   /* -------------------------------
      MERGE SAFELY
   ------------------------------- */
-  const histHourly = hist?.hourly || {};
-  const fcstHourly = fcst?.hourly || {};
-
   return {
     hourly: {
-      time: [...(histHourly.time || []), ...(fcstHourly.time || [])],
-      temperature_2m: [...(histHourly.temperature_2m || []), ...(fcstHourly.temperature_2m || [])],
-      precipitation: [...(histHourly.precipitation || []), ...(fcstHourly.precipitation || [])],
-      wind_speed_10m: [...(histHourly.wind_speed_10m || []), ...(fcstHourly.wind_speed_10m || [])],
-      relative_humidity_2m: [...(histHourly.relative_humidity_2m || []), ...(fcstHourly.relative_humidity_2m || [])],
-      shortwave_radiation: [...(histHourly.shortwave_radiation || []), ...(fcstHourly.shortwave_radiation || [])],
+      time: [...histHourly.time, ...(fcstHourly.time || [])],
+      temperature_2m: [...histHourly.temperature_2m, ...(fcstHourly.temperature_2m || [])],
+      precipitation: [...histHourly.precipitation, ...(fcstHourly.precipitation || [])],
+      wind_speed_10m: [...histHourly.wind_speed_10m, ...(fcstHourly.wind_speed_10m || [])],
+      relative_humidity_2m: [...histHourly.relative_humidity_2m, ...(fcstHourly.relative_humidity_2m || [])],
+      shortwave_radiation: [...histHourly.shortwave_radiation, ...(fcstHourly.shortwave_radiation || [])],
       soil_temperature_0_to_7cm: [
-        ...(histHourly.soil_temperature_0_to_7cm || []),
+        ...histHourly.soil_temperature_0_to_7cm,
         ...(fcstHourly.soil_temperature_0_to_7cm || [])
       ],
       soil_moisture_0_to_7cm: [
-        ...(histHourly.soil_moisture_0_to_7cm || []),
+        ...histHourly.soil_moisture_0_to_7cm,
         ...(fcstHourly.soil_moisture_0_to_7cm || [])
       ],
       et0_fao_evapotranspiration: [
-        ...(histHourly.et0_fao_evapotranspiration || []),
+        ...histHourly.et0_fao_evapotranspiration,
         ...(fcstHourly.et0_fao_evapotranspiration || [])
       ]
     }
@@ -133,7 +167,6 @@ function buildHourly(hourly) {
     const tempC = hourly.temperature_2m?.[i];
     const rainMM = hourly.precipitation?.[i];
 
-    // 🔥 skip junk rows
     if (tempC == null && rainMM == null) continue;
 
     const stC = hourly.soil_temperature_0_to_7cm?.[i];
@@ -141,18 +174,14 @@ function buildHourly(hourly) {
 
     out.push({
       time: t,
-
       tempF: tempC != null ? Math.round((tempC * 9) / 5 + 32) : null,
       rainIn: rainMM != null ? round(rainMM / 25.4, 3) : 0,
       windMph: Math.round((hourly.wind_speed_10m?.[i] || 0) * 0.621371),
       rh: Math.round(hourly.relative_humidity_2m?.[i] || 0),
       solarWm2: Math.round(hourly.shortwave_radiation?.[i] || 0),
-
       et0In: round((hourly.et0_fao_evapotranspiration?.[i] || 0) / 25.4, 3),
-
       sm010: sm ?? null,
       sm010Pct: sm != null ? Math.round(sm * 100) : null,
-
       st010F: stC != null ? Math.round((stC * 9) / 5 + 32) : null
     });
   }
@@ -161,7 +190,7 @@ function buildHourly(hourly) {
 }
 
 /* ================================
-BUILD DAILY (🔥 FIXED ZERO FILTER)
+BUILD DAILY
 ================================ */
 function buildDaily(hourlyRows) {
   const map = new Map();
@@ -200,7 +229,6 @@ function buildDaily(hourlyRows) {
   const out = [];
 
   for (const d of map.values()) {
-
     const hasData =
       d.temps.length ||
       d.rain.length ||
