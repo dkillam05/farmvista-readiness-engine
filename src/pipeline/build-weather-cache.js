@@ -10,15 +10,17 @@ const FORECAST_URL = "https://api.open-meteo.com/v1/forecast";
 HELPERS
 ================================ */
 function avg(arr) {
-  if (!arr.length) return 0;
+  if (!arr.length) return null;
   return arr.reduce((a, b) => a + b, 0) / arr.length;
 }
 
 function sum(arr) {
+  if (!arr.length) return 0;
   return arr.reduce((a, b) => a + b, 0);
 }
 
 function round(v, d = 2) {
+  if (!Number.isFinite(v)) return null;
   const p = Math.pow(10, d);
   return Math.round(v * p) / p;
 }
@@ -34,7 +36,7 @@ function getPastDateISO(daysBack) {
 }
 
 /* ================================
-FETCH WEATHER (WITH SOIL + ET0)
+FETCH WEATHER (HARD FAIL SAFE)
 ================================ */
 async function fetchWeather(lat, lng) {
   const today = getTodayISO();
@@ -46,12 +48,8 @@ async function fetchWeather(lat, lng) {
     "wind_speed_10m",
     "relative_humidity_2m",
     "shortwave_radiation",
-
-    // SOIL
     "soil_temperature_0_to_7cm",
     "soil_moisture_0_to_7cm",
-
-    // ET0
     "et0_fao_evapotranspiration"
   ].join(",");
 
@@ -64,11 +62,19 @@ async function fetchWeather(lat, lng) {
     fetch(fcstUrl)
   ]);
 
+  if (!histRes.ok) {
+    throw new Error("archive weather fetch failed");
+  }
+
+  if (!fcstRes.ok) {
+    throw new Error("forecast weather fetch failed");
+  }
+
   const hist = await histRes.json();
   const fcst = await fcstRes.json();
 
-  if (!histRes.ok || !fcstRes.ok) {
-    throw new Error("weather fetch failed");
+  if (!hist?.hourly || !fcst?.hourly) {
+    throw new Error("weather data missing hourly");
   }
 
   return {
@@ -79,7 +85,6 @@ async function fetchWeather(lat, lng) {
       wind_speed_10m: [...hist.hourly.wind_speed_10m, ...fcst.hourly.wind_speed_10m],
       relative_humidity_2m: [...hist.hourly.relative_humidity_2m, ...fcst.hourly.relative_humidity_2m],
       shortwave_radiation: [...hist.hourly.shortwave_radiation, ...fcst.hourly.shortwave_radiation],
-
       soil_temperature_0_to_7cm: [
         ...hist.hourly.soil_temperature_0_to_7cm,
         ...fcst.hourly.soil_temperature_0_to_7cm
@@ -88,7 +93,6 @@ async function fetchWeather(lat, lng) {
         ...hist.hourly.soil_moisture_0_to_7cm,
         ...fcst.hourly.soil_moisture_0_to_7cm
       ],
-
       et0_fao_evapotranspiration: [
         ...hist.hourly.et0_fao_evapotranspiration,
         ...fcst.hourly.et0_fao_evapotranspiration
@@ -98,38 +102,39 @@ async function fetchWeather(lat, lng) {
 }
 
 /* ================================
-BUILD HOURLY (WITH SOIL + ET0)
+BUILD HOURLY
 ================================ */
 function buildHourly(hourly) {
   const out = [];
 
   for (let i = 0; i < hourly.time.length; i++) {
+    const t = hourly.time[i];
+    if (!t) continue;
+
+    const tempC = hourly.temperature_2m?.[i];
+    const rainMM = hourly.precipitation?.[i];
+
+    // 🔥 CRITICAL: skip completely invalid rows
+    if (tempC == null && rainMM == null) continue;
+
     const stC = hourly.soil_temperature_0_to_7cm?.[i];
     const sm = hourly.soil_moisture_0_to_7cm?.[i];
 
     out.push({
-      time: hourly.time[i],
+      time: t,
 
-      tempF: Math.round((hourly.temperature_2m[i] * 9) / 5 + 32),
-      rainIn: round((hourly.precipitation[i] || 0) / 25.4, 3),
-      windMph: Math.round(hourly.wind_speed_10m[i] * 0.621371),
-      rh: Math.round(hourly.relative_humidity_2m[i]),
-      solarWm2: Math.round(hourly.shortwave_radiation[i] || 0),
+      tempF: tempC != null ? Math.round((tempC * 9) / 5 + 32) : null,
+      rainIn: rainMM != null ? round(rainMM / 25.4, 3) : 0,
+      windMph: Math.round((hourly.wind_speed_10m?.[i] || 0) * 0.621371),
+      rh: Math.round(hourly.relative_humidity_2m?.[i] || 0),
+      solarWm2: Math.round(hourly.shortwave_radiation?.[i] || 0),
 
-      // ET0 (mm → inches)
       et0In: round((hourly.et0_fao_evapotranspiration?.[i] || 0) / 25.4, 3),
 
-      // SOIL MOISTURE
       sm010: sm ?? null,
       sm010Pct: sm != null ? Math.round(sm * 100) : null,
-      sm010Hours: sm != null ? 1 : 0,
-      sm010Source: "0_7",
 
-      // SOIL TEMP
-      st010C: stC ?? null,
-      st010F: stC != null ? Math.round((stC * 9) / 5 + 32) : null,
-      st010Hours: stC != null ? 1 : 0,
-      st010Source: "0_7"
+      st010F: stC != null ? Math.round((stC * 9) / 5 + 32) : null
     });
   }
 
@@ -137,12 +142,14 @@ function buildHourly(hourly) {
 }
 
 /* ================================
-BUILD DAILY (WITH ET0)
+BUILD DAILY (🔥 FIXED ZERO FILTER)
 ================================ */
 function buildDaily(hourlyRows) {
   const map = new Map();
 
   for (const h of hourlyRows) {
+    if (!h.time) continue;
+
     const date = h.time.slice(0, 10);
 
     if (!map.has(date)) {
@@ -161,12 +168,11 @@ function buildDaily(hourlyRows) {
 
     const d = map.get(date);
 
-    d.temps.push(h.tempF);
-    d.winds.push(h.windMph);
-    d.rhs.push(h.rh);
-    d.solar.push(h.solarWm2);
-    d.rain.push(h.rainIn);
-
+    if (h.tempF != null) d.temps.push(h.tempF);
+    if (h.windMph != null) d.winds.push(h.windMph);
+    if (h.rh != null) d.rhs.push(h.rh);
+    if (h.solarWm2 != null) d.solar.push(h.solarWm2);
+    if (h.rainIn != null) d.rain.push(h.rainIn);
     if (h.et0In != null) d.et0.push(h.et0In);
     if (h.sm010 != null) d.sm.push(h.sm010);
     if (h.st010F != null) d.st.push(h.st010F);
@@ -175,27 +181,26 @@ function buildDaily(hourlyRows) {
   const out = [];
 
   for (const d of map.values()) {
+
+    // 🔥 CRITICAL: skip garbage days
+    const hasData =
+      d.temps.length ||
+      d.rain.length ||
+      d.wind.length ||
+      d.rhs.length;
+
+    if (!hasData) continue;
+
     out.push({
       dateISO: d.dateISO,
-
       tempAvg: round(avg(d.temps), 1),
       windAvg: round(avg(d.winds), 1),
       rhAvg: round(avg(d.rhs), 1),
       solarAvg: round(avg(d.solar), 1),
       rainTotal: round(sum(d.rain), 3),
-
-      // ET0 (daily total)
       et0In: d.et0.length ? round(sum(d.et0), 3) : 0,
-
-      // SOIL
       sm010: d.sm.length ? round(avg(d.sm), 3) : null,
-      sm010Pct: d.sm.length ? Math.round(avg(d.sm) * 100) : null,
-      sm010Hours: d.sm.length,
-      sm010Source: "0_7",
-
-      st010F: d.st.length ? Math.round(avg(d.st)) : null,
-      st010Hours: d.st.length,
-      st010Source: "0_7"
+      st010F: d.st.length ? Math.round(avg(d.st)) : null
     });
   }
 
