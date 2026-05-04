@@ -114,14 +114,23 @@ function runReadinessEngine({
 
   // Seed logic
   let storage;
-  let surface = 0;
+  let surface;
   let seedSource;
 
-  if (previousState && Number.isFinite(previousState.storageFinal)) {
-    storage = clamp(previousState.storageFinal, 0, Smax);
+  if (previousState && Number.isFinite(Number(previousState.storageFinal))) {
+    storage = clamp(Number(previousState.storageFinal), 0, Smax);
+
+    // CRITICAL FIX:
+    // Carry surface wetness forward during rolling runs.
+    // Before this, surface always restarted at 0.
+    surface = Number.isFinite(Number(previousState.surfaceFinal))
+      ? clamp(Number(previousState.surfaceFinal), 0, 1.2)
+      : 0;
+
     seedSource = "latest";
   } else {
     storage = 0.10 * Smax;
+    surface = 0;
     seedSource = "baseline";
   }
 
