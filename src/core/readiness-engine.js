@@ -1,6 +1,6 @@
 // readiness-engine.js
 // PURE FIELD READINESS ENGINE (NO FIRESTORE, NO API)
-// This is the heart of the system
+// Tuned for realistic wet-field behavior
 
 function clamp(n, lo, hi) {
   return Math.max(lo, Math.min(hi, Number(n)));
@@ -49,14 +49,14 @@ function effectiveRain(rain, storage, Smax) {
 }
 
 /* =========================================================================
-SURFACE WETNESS
+SURFACE WETNESS (TUNED)
 ========================================================================= */
 function surfaceUpdate(surface, rain, dry) {
-  // add rain to surface
-  surface += rain * 2.0;
+  // 🔥 Stronger rain impact
+  surface += rain * 2.8;
 
-  // dry it down
-  surface -= (0.03 + dry * 0.25);
+  // 🔥 Slower drying (keeps field wet longer)
+  surface -= (0.015 + dry * 0.18);
 
   return clamp(surface, 0, 1.2);
 }
@@ -65,10 +65,8 @@ function surfaceUpdate(surface, rain, dry) {
 STORAGE UPDATE
 ========================================================================= */
 function storageUpdate(storage, rainEff, dry, Smax) {
-  // add infiltration
   storage += rainEff;
 
-  // drying loss
   const loss = (0.02 + dry * 0.15);
   storage -= loss;
 
@@ -76,16 +74,16 @@ function storageUpdate(storage, rainEff, dry, Smax) {
 }
 
 /* =========================================================================
-READINESS
+READINESS (TUNED)
 ========================================================================= */
 function calcReadiness(storage, surface, Smax) {
   const storageFrac = clamp(storage / Smax, 0, 1);
 
   let readiness = 100 * (1 - storageFrac);
 
-  // surface penalty
+  // 🔥 Stronger surface penalty
   const surfaceFrac = clamp(surface / 1.2, 0, 1);
-  const surfacePenalty = Math.pow(surfaceFrac, 0.9) * 55;
+  const surfacePenalty = Math.pow(surfaceFrac, 0.7) * 85;
 
   readiness -= surfacePenalty;
 
@@ -105,14 +103,12 @@ function runReadinessEngine({
     return null;
   }
 
-  // Storage capacity
   const Smax = clamp(
     3 + (soilWetness / 100) + (drainageIndex / 100),
     3,
     5
   );
 
-  // Seed logic
   let storage;
   let surface;
   let seedSource;
@@ -120,9 +116,7 @@ function runReadinessEngine({
   if (previousState && Number.isFinite(Number(previousState.storageFinal))) {
     storage = clamp(Number(previousState.storageFinal), 0, Smax);
 
-    // CRITICAL FIX:
-    // Carry surface wetness forward during rolling runs.
-    // Before this, surface always restarted at 0.
+    // carry forward surface state
     surface = Number.isFinite(Number(previousState.surfaceFinal))
       ? clamp(Number(previousState.surfaceFinal), 0, 1.2)
       : 0;
