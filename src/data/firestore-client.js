@@ -21,7 +21,7 @@ function getTodayISO() {
 GET FIELDS
 ================================ */
 async function getFields() {
-  const snap = await db.collection("fields").get();
+  const snap = await db.collection(FIELDS).get();
 
   const out = [];
 
@@ -48,7 +48,7 @@ async function getFields() {
 }
 
 /* ================================
-GET WEATHER (🔥 FINAL FIX)
+GET WEATHER
 ================================ */
 async function getWeather(fieldId) {
   const snap = await db.collection(WEATHER).doc(fieldId).get();
@@ -62,14 +62,8 @@ async function getWeather(fieldId) {
 
   const today = getTodayISO();
 
-  /* -------------------------------------------------------------
-  1. LAST 30 DAYS (DAILY)
-  ------------------------------------------------------------- */
   const last30Daily = daily.slice(-30);
 
-  /* -------------------------------------------------------------
-  2. TODAY HOURLY
-  ------------------------------------------------------------- */
   const todayHourly = hourly
     .filter(h => h.time?.startsWith(today))
     .map(h => ({
@@ -81,9 +75,6 @@ async function getWeather(fieldId) {
       rainIn: Number(h.rainIn || 0)
     }));
 
-  /* -------------------------------------------------------------
-  3. RETURN COMBINED
-  ------------------------------------------------------------- */
   return [...last30Daily, ...todayHourly];
 }
 
@@ -109,20 +100,33 @@ async function getLatest(fieldId) {
 }
 
 /* ================================
-WRITE RESULT
+WRITE RESULT (🔥 FIXED)
 ================================ */
 async function writeResult(result) {
   const ref = db.collection(LATEST).doc(result.fieldId);
 
+  const todayISO = getTodayISO();
+
   await ref.set({
     fieldId: result.fieldId,
+
+    // CORE VALUES
     readiness: result.readiness,
     wetness: result.wetness,
     storageFinal: result.storageFinal,
     surfaceFinal: result.surfaceFinal,
+
+    // ENGINE META
     seedSource: result.seedSource,
     Smax: result.Smax,
-    updatedAt: admin.firestore.FieldValue.serverTimestamp()
+
+    // 🔥 CRITICAL FIXES
+    asOfDateISO: todayISO, // THIS FIXES YOUR UI
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+
+    // Optional but helpful
+    mode: result.mode,
+
   }, { merge: true });
 }
 
