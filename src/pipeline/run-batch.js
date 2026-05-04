@@ -26,7 +26,7 @@ async function runBatch(deps, opts = {}) {
     getWeather,
     getLatest,
     writeResult,
-    saveWeatherCache   // 👈 NEW DEP (we will use this)
+    saveWeatherCache
   } = deps;
 
   const {
@@ -51,7 +51,7 @@ async function runBatch(deps, opts = {}) {
       group.map(async (field) => {
         try {
           /* -------------------------------------------------------------
-          1. BUILD WEATHER (NEW FIX)
+          1. BUILD WEATHER
           ------------------------------------------------------------- */
 
           let weatherCache = null;
@@ -59,7 +59,6 @@ async function runBatch(deps, opts = {}) {
           try {
             weatherCache = await buildWeatherCache(field);
 
-            // Save if function provided
             if (saveWeatherCache && weatherCache) {
               await saveWeatherCache(field.id, weatherCache);
             }
