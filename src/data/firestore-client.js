@@ -1,3 +1,6 @@
+// FILE: /data/firestore-client.js
+// FIX: keep hourly for storage, but DO NOT mix into readiness input
+
 const admin = require("firebase-admin");
 
 if (!admin.apps.length) {
@@ -48,7 +51,7 @@ async function getFields() {
 }
 
 /* ================================
-GET WEATHER
+GET WEATHER (🔥 FIXED)
 ================================ */
 async function getWeather(fieldId) {
   const snap = await db.collection(WEATHER).doc(fieldId).get();
@@ -62,12 +65,21 @@ async function getWeather(fieldId) {
 
   const today = getTodayISO();
 
-  const last30Daily = daily.slice(-30);
+  // ✅ KEEP DAILY CLEAN (this is what engine should use)
+  const last30Daily = daily.map(r => ({
+    dateISO: r.dateISO, // YYYY-MM-DD
+    tempF: Number(r.tempF || 0),
+    windMph: Number(r.windMph || 0),
+    rh: Number(r.rh || 0),
+    solarWm2: Number(r.solarWm2 || 0),
+    rainIn: Number(r.rainIn || 0)
+  })).slice(-30);
 
+  // ⚠️ KEEP HOURLY SEPARATE (DO NOT MIX INTO DAILY)
   const todayHourly = hourly
     .filter(h => h.time?.startsWith(today))
     .map(h => ({
-      dateISO: h.time,
+      dateISO: h.time, // ISO timestamp (longer than 10 chars)
       tempF: Number(h.tempF || 0),
       windMph: Number(h.windMph || 0),
       rh: Number(h.rh || 0),
@@ -75,6 +87,7 @@ async function getWeather(fieldId) {
       rainIn: Number(h.rainIn || 0)
     }));
 
+  // 🔥 RETURN BOTH (run-field now filters correctly)
   return [...last30Daily, ...todayHourly];
 }
 
@@ -100,7 +113,7 @@ async function getLatest(fieldId) {
 }
 
 /* ================================
-WRITE RESULT (🔥 FIXED)
+WRITE RESULT (UNCHANGED — CORRECT)
 ================================ */
 async function writeResult(result) {
   const ref = db.collection(LATEST).doc(result.fieldId);
@@ -120,11 +133,11 @@ async function writeResult(result) {
     seedSource: result.seedSource,
     Smax: result.Smax,
 
-    // 🔥 CRITICAL FIXES
-    asOfDateISO: todayISO, // THIS FIXES YOUR UI
+    // 🔥 REQUIRED FOR UI
+    asOfDateISO: todayISO,
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
 
-    // Optional but helpful
+    // helpful debug
     mode: result.mode,
 
   }, { merge: true });
