@@ -74,16 +74,17 @@ function storageUpdate(storage, rainEff, dry, Smax) {
 }
 
 /* =========================================================================
-READINESS (TUNED)
+READINESS (🔥 FIXED)
 ========================================================================= */
 function calcReadiness(storage, surface, Smax) {
   const storageFrac = clamp(storage / Smax, 0, 1);
 
-  let readiness = 100 * (1 - storageFrac);
+  // 🔥 STORAGE DOMINATES MUCH HARDER NOW
+  let readiness = 100 * Math.pow(1 - storageFrac, 1.8);
 
-  // stronger surface penalty
+  // surface still matters, but less overpowering
   const surfaceFrac = clamp(surface / 1.2, 0, 1);
-  const surfacePenalty = Math.pow(surfaceFrac, 0.7) * 85;
+  const surfacePenalty = Math.pow(surfaceFrac, 0.7) * 60;
 
   readiness -= surfacePenalty;
 
@@ -119,13 +120,11 @@ function runReadinessEngine({
   const forceRebuild = !!(previousState && previousState.forceRebuild);
 
   if (forceRebuild) {
-    // FULL 30-day rebuild from weather only
     storage = 0.10 * Smax;
     surface = 0;
     seedSource = "rewind";
   }
   else if (previousState && Number.isFinite(Number(previousState.storageFinal))) {
-    // normal rolling behavior
     storage = clamp(Number(previousState.storageFinal), 0, Smax);
 
     surface = Number.isFinite(Number(previousState.surfaceFinal))
@@ -135,7 +134,6 @@ function runReadinessEngine({
     seedSource = "latest";
   }
   else {
-    // new field baseline
     storage = 0.10 * Smax;
     surface = 0;
     seedSource = "baseline";
