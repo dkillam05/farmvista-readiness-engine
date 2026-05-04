@@ -1,5 +1,6 @@
-// run-field.js
+// FILE: /pipeline/run-field.js
 // Runs readiness for ONE field (no API, no batching)
+// FIX: enforce DAILY-ONLY window so readiness matches storage
 
 const { runReadinessEngine } = require("../core/readiness-engine");
 
@@ -21,19 +22,25 @@ function hasLocationChanged(field, latestDoc) {
 }
 
 /* =========================================================================
-BUILD WEATHER WINDOW
+BUILD WEATHER WINDOW (🔥 FIXED — NO HOURLY MIXING)
 ========================================================================= */
 
 function buildWeatherWindow(weatherRows, mode) {
   if (!Array.isArray(weatherRows)) return [];
 
-  // ✅ FULL REBUILD = USE ALL WEATHER
+  // 🔥 CRITICAL FIX:
+  // Only allow DAILY rows (YYYY-MM-DD)
+  const dailyRows = weatherRows.filter(
+    r => typeof r.dateISO === "string" && r.dateISO.length === 10
+  );
+
+  // ✅ FULL REBUILD = last 30 DAYS ONLY
   if (mode === "rebuild") {
-    return weatherRows;
+    return dailyRows.slice(-30);
   }
 
-  // rolling = last 3 days
-  return weatherRows.slice(-3);
+  // ✅ ROLLING = last 3 FULL DAYS ONLY
+  return dailyRows.slice(-3);
 }
 
 /* =========================================================================
