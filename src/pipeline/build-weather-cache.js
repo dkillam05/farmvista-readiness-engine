@@ -36,7 +36,7 @@ function getPastDateISO(daysBack) {
 }
 
 /* ================================
-FETCH WEATHER (🔥 FIXED FALLBACK)
+FETCH WEATHER (🔥 CLEAN FIX)
 ================================ */
 async function fetchWeather(lat, lng) {
   const today = getTodayISO();
@@ -61,18 +61,24 @@ async function fetchWeather(lat, lng) {
   let fcst = null;
 
   /* -------------------------------
-     TRY ARCHIVE (DON’T FAIL RUN)
+     ARCHIVE (RETRY ONCE)
   ------------------------------- */
   try {
-    const histRes = await fetch(histUrl);
+    let histRes = await fetch(histUrl);
+
+    if (!histRes.ok) {
+      // retry once
+      histRes = await fetch(histUrl);
+    }
 
     if (histRes.ok) {
       hist = await histRes.json();
     } else {
-      console.warn("[weather] archive bad response");
+      console.log("[weather] archive unavailable → fallback");
     }
+
   } catch (e) {
-    console.warn("[weather] archive failed:", e?.message || e);
+    console.log("[weather] archive failed → fallback");
   }
 
   /* -------------------------------
@@ -86,6 +92,7 @@ async function fetchWeather(lat, lng) {
     }
 
     fcst = await fcstRes.json();
+
   } catch (e) {
     throw new Error("forecast weather fetch failed");
   }
@@ -93,14 +100,16 @@ async function fetchWeather(lat, lng) {
   const fcstHourly = fcst?.hourly || {};
 
   /* -------------------------------
-     🔥 FIX: BUILD HISTORY IF ARCHIVE BAD
+     HISTORY DECISION
   ------------------------------- */
   let histHourly = hist?.hourly;
 
-  if (!histHourly || !histHourly.time || histHourly.time.length < 24) {
-    console.warn("[weather] using forecast fallback history");
+  let usedFallback = false;
 
-    const repeat = 15; // ~30 days
+  if (!histHourly || !histHourly.time || histHourly.time.length < 24) {
+    usedFallback = true;
+
+    const repeat = 15;
 
     histHourly = {
       time: [],
@@ -127,8 +136,12 @@ async function fetchWeather(lat, lng) {
     }
   }
 
+  if (usedFallback) {
+    console.log("[weather] using forecast fallback history");
+  }
+
   /* -------------------------------
-     MERGE SAFELY
+     MERGE
   ------------------------------- */
   return {
     hourly: {
