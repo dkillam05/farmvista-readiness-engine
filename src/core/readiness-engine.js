@@ -1,6 +1,5 @@
-// readiness-engine.js
-// PURE FIELD READINESS ENGINE (NO FIRESTORE, NO API)
-// Tuned for realistic wet-field behavior + REBUILD SUPPORT
+// FILE: /core/readiness-engine.js
+// FIXED: STORAGE-DRIVEN READINESS (no more fake 100s)
 
 function clamp(n, lo, hi) {
   return Math.max(lo, Math.min(hi, Number(n)));
@@ -41,21 +40,16 @@ function effectiveRain(rain, storage, Smax) {
   if (!rain || rain <= 0) return 0;
 
   const saturation = clamp(storage / Smax, 0, 1);
-
-  // more saturated → more runoff
   const runoff = Math.pow(saturation, 2.2);
 
   return rain * (1 - runoff);
 }
 
 /* =========================================================================
-SURFACE WETNESS (TUNED)
+SURFACE WETNESS
 ========================================================================= */
 function surfaceUpdate(surface, rain, dry) {
-  // stronger rain impact
   surface += rain * 2.8;
-
-  // slower drying
   surface -= (0.015 + dry * 0.18);
 
   return clamp(surface, 0, 1.2);
@@ -74,17 +68,21 @@ function storageUpdate(storage, rainEff, dry, Smax) {
 }
 
 /* =========================================================================
-READINESS (🔥 FIXED)
+READINESS (🔥 HARD FIX)
 ========================================================================= */
 function calcReadiness(storage, surface, Smax) {
+
   const storageFrac = clamp(storage / Smax, 0, 1);
 
-  // 🔥 STORAGE DOMINATES MUCH HARDER NOW
-  let readiness = 100 * Math.pow(1 - storageFrac, 1.8);
+  // 🔥 HARD LINEAR DROP (THIS FIXES YOUR ISSUE)
+  let readiness = 100 * (1 - storageFrac);
 
-  // surface still matters, but less overpowering
+  // 🔥 STRONG NONLINEAR PUNISHMENT WHEN WET
+  readiness *= (1 - Math.pow(storageFrac, 1.3));
+
+  // 🔥 SURFACE PENALTY (but not dominant)
   const surfaceFrac = clamp(surface / 1.2, 0, 1);
-  const surfacePenalty = Math.pow(surfaceFrac, 0.7) * 60;
+  const surfacePenalty = surfaceFrac * 50;
 
   readiness -= surfacePenalty;
 
@@ -114,9 +112,6 @@ function runReadinessEngine({
   let surface;
   let seedSource;
 
-  /* ============================================================
-     🔥 NEW: REBUILD / REWIND SUPPORT
-  ============================================================ */
   const forceRebuild = !!(previousState && previousState.forceRebuild);
 
   if (forceRebuild) {
