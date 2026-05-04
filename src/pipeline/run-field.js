@@ -1,6 +1,5 @@
 // run-field.js
 // Runs readiness for ONE field (no API, no batching)
-// This is the bridge between data + engine
 
 const { runReadinessEngine } = require("../core/readiness-engine");
 
@@ -25,22 +24,16 @@ function hasLocationChanged(field, latestDoc) {
 BUILD WEATHER WINDOW
 ========================================================================= */
 
-function buildWeatherWindow(weatherRows, latestDoc, mode) {
+function buildWeatherWindow(weatherRows, mode) {
   if (!Array.isArray(weatherRows)) return [];
 
-  // NEW FIELD OR LOCATION CHANGE → FULL 30 DAY
+  // ✅ FULL REBUILD = USE ALL WEATHER
   if (mode === "rebuild") {
     return weatherRows;
   }
 
-  // 🔥 FIX: use last 3 days instead of 2
-  // Ensures:
-  // - today is always included (even if partial)
-  // - avoids ordering/timing issues
-  // - gives buffer for MRMS lag
-  const last3Days = weatherRows.slice(-3);
-
-  return last3Days;
+  // rolling = last 3 days
+  return weatherRows.slice(-3);
 }
 
 /* =========================================================================
@@ -52,7 +45,8 @@ async function runField({
   weatherRows,
   latestDoc,
   soilWetness,
-  drainageIndex
+  drainageIndex,
+  rebuild = false // 👈 ADD THIS
 }) {
   if (!field || !weatherRows || !weatherRows.length) {
     return {
@@ -67,11 +61,14 @@ async function runField({
 
   let mode = "rolling";
 
-  if (isNewField(latestDoc)) {
+  // 🔥 PRIORITY: explicit rebuild flag
+  if (rebuild) {
     mode = "rebuild";
   }
-
-  if (hasLocationChanged(field, latestDoc)) {
+  else if (isNewField(latestDoc)) {
+    mode = "rebuild";
+  }
+  else if (hasLocationChanged(field, latestDoc)) {
     mode = "rebuild";
   }
 
@@ -79,7 +76,7 @@ async function runField({
   BUILD WEATHER WINDOW
   --------------------------------------------------------------------- */
 
-  const windowRows = buildWeatherWindow(weatherRows, latestDoc, mode);
+  const windowRows = buildWeatherWindow(weatherRows, mode);
 
   if (!windowRows.length) {
     return {
@@ -97,7 +94,6 @@ async function runField({
   if (mode === "rolling" && latestDoc) {
     previousState = {
       storageFinal: Number(latestDoc.storageFinal),
-      // 🔥 FIX: carry forward surface state too
       surfaceFinal: Number(latestDoc.surfaceFinal || 0)
     };
   }
@@ -144,7 +140,8 @@ async function runField({
     debug: {
       usedRows: windowRows.length,
       totalRowsAvailable: weatherRows.length,
-      mode
+      mode,
+      rebuildFlag: rebuild
     }
   };
 }
