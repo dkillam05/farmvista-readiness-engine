@@ -1,5 +1,5 @@
 // FILE: /data/firestore-client.js
-// FIX: clean daily data + safe fallback to hourly when daily is garbage
+// FULL FIX: correct daily mapping + smart fallback + stable hourly blending
 
 const admin = require("firebase-admin");
 
@@ -51,7 +51,7 @@ async function getFields() {
 }
 
 /* ================================
-GET WEATHER (🔥 REAL FIX HERE)
+GET WEATHER (🔥 REAL FIX)
 ================================ */
 async function getWeather(fieldId) {
   const snap = await db.collection(WEATHER).doc(fieldId).get();
@@ -66,33 +66,34 @@ async function getWeather(fieldId) {
   const today = getTodayISO();
 
   /* -------------------------------------------------
-  🔥 CLEAN DAILY (REMOVE ZERO / FAKE DAYS)
+  🔥 FIX #1: MAP DAILY CORRECTLY (YOUR REAL STRUCTURE)
   ------------------------------------------------- */
   const cleanDaily = daily
     .filter(r => {
-      // remove garbage days (your main issue)
       return (
         r &&
         (
-          Number(r.tempF) > 0 ||
-          Number(r.rainIn) > 0 ||
-          Number(r.windMph) > 0 ||
-          Number(r.rh) > 0
+          Number(r.tempAvg) > 0 ||
+          Number(r.rainTotal) > 0 ||
+          Number(r.windAvg) > 0 ||
+          Number(r.rhAvg) > 0
         )
       );
     })
     .map(r => ({
       dateISO: r.dateISO,
-      tempF: Number(r.tempF || 0),
-      windMph: Number(r.windMph || 0),
-      rh: Number(r.rh || 0),
-      solarWm2: Number(r.solarWm2 || 0),
-      rainIn: Number(r.rainIn || 0)
+
+      // ✅ CORRECT MAPPING
+      tempF: Number(r.tempAvg || 0),
+      windMph: Number(r.windAvg || 0),
+      rh: Number(r.rhAvg || 0),
+      solarWm2: Number(r.solarAvg || 0),
+      rainIn: Number(r.rainTotal || 0)
     }))
     .slice(-30);
 
   /* -------------------------------------------------
-  HOURLY (TODAY ONLY — CLEAN)
+  🔥 FIX #2: TODAY = HOURLY ROLLING (NOT DAILY)
   ------------------------------------------------- */
   const todayHourly = hourly
     .filter(h => h.time?.startsWith(today))
@@ -106,11 +107,11 @@ async function getWeather(fieldId) {
     }));
 
   /* -------------------------------------------------
-  🔥 FALLBACK: if daily is garbage, use recent hourly
+  🔥 FIX #3: IF DAILY IS BAD → USE HOURLY HISTORY
   ------------------------------------------------- */
   if (!cleanDaily.length) {
     const fallbackHourly = hourly
-      .slice(-72) // last ~3 days
+      .slice(-72)
       .map(h => ({
         dateISO: h.time,
         tempF: Number(h.tempF || 0),
@@ -124,7 +125,7 @@ async function getWeather(fieldId) {
   }
 
   /* -------------------------------------------------
-  NORMAL RETURN
+  🔥 FINAL RETURN (HISTORY + LIVE TODAY)
   ------------------------------------------------- */
   return [...cleanDaily, ...todayHourly];
 }
@@ -151,7 +152,7 @@ async function getLatest(fieldId) {
 }
 
 /* ================================
-WRITE RESULT (UNCHANGED — CORRECT)
+WRITE RESULT
 ================================ */
 async function writeResult(result) {
   const ref = db.collection(LATEST).doc(result.fieldId);
