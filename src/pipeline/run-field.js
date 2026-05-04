@@ -1,6 +1,5 @@
 // FILE: /pipeline/run-field.js
-// Runs readiness for ONE field (no API, no batching)
-// FIX: allow DAILY + TODAY HOURLY (real behavior restored)
+// FINAL FIX: correct history window (NO MORE FAKE 100s)
 
 const { runReadinessEngine } = require("../core/readiness-engine");
 
@@ -22,7 +21,7 @@ function hasLocationChanged(field, latestDoc) {
 }
 
 /* =========================================================================
-BUILD WEATHER WINDOW (🔥 FIXED CORRECTLY)
+BUILD WEATHER WINDOW (🔥 REAL FIX)
 ========================================================================= */
 
 function buildWeatherWindow(weatherRows, mode) {
@@ -36,7 +35,7 @@ function buildWeatherWindow(weatherRows, mode) {
     r => typeof r.dateISO === "string" && r.dateISO.length > 10
   );
 
-  // ✅ FULL REBUILD = last 30 daily + today hourly
+  // ✅ FULL REBUILD = 30 days history
   if (mode === "rebuild") {
     return [
       ...dailyRows.slice(-30),
@@ -44,9 +43,9 @@ function buildWeatherWindow(weatherRows, mode) {
     ];
   }
 
-  // ✅ ROLLING = last 3 days + today hourly
+  // 🔥 ROLLING = 10 DAYS (THIS IS THE FIX)
   return [
-    ...dailyRows.slice(-3),
+    ...dailyRows.slice(-10),
     ...hourlyRows
   ];
 }
@@ -70,10 +69,6 @@ async function runField({
     };
   }
 
-  /* ---------------------------------------------------------------------
-  DETERMINE MODE
-  --------------------------------------------------------------------- */
-
   let mode = "rolling";
 
   if (rebuild) {
@@ -86,10 +81,6 @@ async function runField({
     mode = "rebuild";
   }
 
-  /* ---------------------------------------------------------------------
-  BUILD WEATHER WINDOW
-  --------------------------------------------------------------------- */
-
   const windowRows = buildWeatherWindow(weatherRows, mode);
 
   if (!windowRows.length) {
@@ -99,10 +90,6 @@ async function runField({
     };
   }
 
-  /* ---------------------------------------------------------------------
-  PREVIOUS STATE
-  --------------------------------------------------------------------- */
-
   let previousState = null;
 
   if (mode === "rolling" && latestDoc) {
@@ -111,10 +98,6 @@ async function runField({
       surfaceFinal: Number(latestDoc.surfaceFinal || 0)
     };
   }
-
-  /* ---------------------------------------------------------------------
-  RUN ENGINE
-  --------------------------------------------------------------------- */
 
   const result = runReadinessEngine({
     weatherRows: windowRows,
@@ -130,27 +113,17 @@ async function runField({
     };
   }
 
-  /* ---------------------------------------------------------------------
-  BUILD OUTPUT
-  --------------------------------------------------------------------- */
-
   return {
     ok: true,
     mode,
-
     fieldId: field.id,
-
     readiness: Math.round(result.readiness),
     wetness: Math.round(100 - result.readiness),
-
     storageFinal: result.storageFinal,
     surfaceFinal: result.surfaceFinal,
-
     seedSource: result.seedSource,
     Smax: result.Smax,
-
     trace: result.trace,
-
     debug: {
       usedRows: windowRows.length,
       totalRowsAvailable: weatherRows.length,
