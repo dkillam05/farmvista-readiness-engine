@@ -1,5 +1,5 @@
 // run-batch.js
-// Runs readiness for ALL fields (WITH WEATHER REBUILD FIX + REBUILD FLAG SUPPORT)
+// Runs readiness for ALL fields (FINAL - CLEAN REBUILD + ROLLING SUPPORT)
 
 const { runField } = require("./run-field");
 const { buildWeatherCache } = require("./build-weather-cache");
@@ -33,7 +33,7 @@ async function runBatch(deps, opts = {}) {
     concurrency = 6,
     soilWetnessDefault = 60,
     drainageDefault = 45,
-    rebuild = false // 👈 ADDED
+    rebuild = false
   } = opts;
 
   if (!getFields || !getWeather || !getLatest || !writeResult) {
@@ -94,15 +94,16 @@ async function runBatch(deps, opts = {}) {
             : drainageDefault;
 
           /* -------------------------------------------------------------
-          3. RUN FIELD
+          3. RUN FIELD (FINAL CORRECT VERSION)
           ------------------------------------------------------------- */
 
           const result = await runField({
             field,
             weatherRows,
-            latestDoc: rebuild ? null : latestDoc, // 👈 CORE FIX
+            latestDoc,              // ✅ always pass actual latest
             soilWetness,
-            drainageIndex
+            drainageIndex,
+            rebuild                // ✅ explicit rebuild control
           });
 
           if (!result || !result.ok) {
@@ -129,7 +130,7 @@ async function runBatch(deps, opts = {}) {
     ok,
     fail,
     total: fields.length,
-    rebuild // 👈 helpful debug
+    rebuild
   };
 }
 
