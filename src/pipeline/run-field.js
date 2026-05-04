@@ -1,6 +1,6 @@
 // FILE: /pipeline/run-field.js
 // Runs readiness for ONE field (no API, no batching)
-// FIX: enforce DAILY-ONLY window so readiness matches storage
+// FIX: allow DAILY + TODAY HOURLY (real behavior restored)
 
 const { runReadinessEngine } = require("../core/readiness-engine");
 
@@ -22,25 +22,33 @@ function hasLocationChanged(field, latestDoc) {
 }
 
 /* =========================================================================
-BUILD WEATHER WINDOW (🔥 FIXED — NO HOURLY MIXING)
+BUILD WEATHER WINDOW (🔥 FIXED CORRECTLY)
 ========================================================================= */
 
 function buildWeatherWindow(weatherRows, mode) {
   if (!Array.isArray(weatherRows)) return [];
 
-  // 🔥 CRITICAL FIX:
-  // Only allow DAILY rows (YYYY-MM-DD)
   const dailyRows = weatherRows.filter(
     r => typeof r.dateISO === "string" && r.dateISO.length === 10
   );
 
-  // ✅ FULL REBUILD = last 30 DAYS ONLY
+  const hourlyRows = weatherRows.filter(
+    r => typeof r.dateISO === "string" && r.dateISO.length > 10
+  );
+
+  // ✅ FULL REBUILD = last 30 daily + today hourly
   if (mode === "rebuild") {
-    return dailyRows.slice(-30);
+    return [
+      ...dailyRows.slice(-30),
+      ...hourlyRows
+    ];
   }
 
-  // ✅ ROLLING = last 3 FULL DAYS ONLY
-  return dailyRows.slice(-3);
+  // ✅ ROLLING = last 3 days + today hourly
+  return [
+    ...dailyRows.slice(-3),
+    ...hourlyRows
+  ];
 }
 
 /* =========================================================================
@@ -53,7 +61,7 @@ async function runField({
   latestDoc,
   soilWetness,
   drainageIndex,
-  rebuild = false // 👈 ADD THIS
+  rebuild = false
 }) {
   if (!field || !weatherRows || !weatherRows.length) {
     return {
@@ -68,7 +76,6 @@ async function runField({
 
   let mode = "rolling";
 
-  // 🔥 PRIORITY: explicit rebuild flag
   if (rebuild) {
     mode = "rebuild";
   }
