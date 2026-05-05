@@ -5,7 +5,7 @@
 
 // THIS IS YOUR "/" ROUTE LOGIC MOVED
 
-const loadFields = require("./fields");
+const { loadFields } = require("./fields");   // ✅ FIXED
 const buildWeather = require("./weather-cache");
 const { runFieldReadinessCoreServer } = require("./readiness");
 
