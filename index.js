@@ -2391,14 +2391,13 @@ let weatherRows = buildWeatherRows(
 // 🔍 DEBUG VERIFY (VERY IMPORTANT)
 if (weatherRows?.length) {
   const sample = weatherRows[weatherRows.length - 1];
-  console.log("[WEATHER ROW CHECK]", {
-    fieldId: f.id,
-    date: sample?.dateISO,
-    rainIn: sample?.rainIn,
-    rainAdj: sample?.rainInAdj,
-    source: sample?.rainSource
-  });
+
+  console.log(
+    `[WEATHER ROW CHECK] fieldId=${f.id} date=${sample?.dateISO} ` +
+    `openMeteo=${sample?.rainIn} mrms=${sample?.rainInAdj} source=${sample?.rainSource}`
+  );
 }
+
 
 if (!weatherRows.length) {
   console.error("[WEATHER] FAILED to build weatherRows for field:", f.id);
