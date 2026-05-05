@@ -1,6 +1,6 @@
 // ================================
 // FILE: weather-row-builder.js
-// PURPOSE: Clean MRMS + Forecast merge (FIXED)
+// PURPOSE: Clean MRMS + Forecast merge (FIXED - TRUE MRMS OVERRIDE)
 // ================================
 
 function buildMrmsDailyMapRows(mrmsDoc) {
@@ -42,16 +42,24 @@ function buildWeatherRows(wxDoc, mrmsDoc, timezone) {
   return baseRows.map((r) => {
     const iso = String(r?.dateISO || "").slice(0, 10);
 
-    // 🔥 CHANGE IS HERE
     const isFuture = iso > todayISO;
-
     const mrms = mrmsMap.get(iso);
 
-    // ✅ PAST + TODAY → USE MRMS IF AVAILABLE
+    // ✅ PAST + TODAY → FORCE MRMS (FULL OVERRIDE)
     if (!isFuture && mrms) {
       return {
         ...r,
+
+        // 🔥 HARD OVERRIDE (THIS WAS MISSING)
+        rainIn: mrms.rainIn,
         rainInAdj: mrms.rainIn,
+
+        // keep breakdown if you want
+        rainMorningIn: 0,
+        rainMiddayIn: 0,
+        rainEveningIn: mrms.rainIn,
+
+        // metadata
         rainSource: "mrms",
         rainMrmsIn: mrms.rainIn,
         rainMrmsMm: mrms.rainMm,
@@ -59,9 +67,10 @@ function buildWeatherRows(wxDoc, mrmsDoc, timezone) {
       };
     }
 
-    // ✅ FUTURE → OPEN METEO
+    // ✅ FUTURE → FORECAST
     return {
       ...r,
+      rainIn: r.rainIn,
       rainInAdj: r.rainIn,
       rainSource: "open-meteo"
     };
