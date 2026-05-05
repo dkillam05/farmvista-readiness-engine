@@ -3,7 +3,8 @@
 // PURPOSE: Fetch + cache weather
 // ================================
 
-const { db, admin } = require("../config/firestore");
+const db = require("../config/firestore");   // ✅ FIXED
+const admin = require("firebase-admin");     // ✅ FIXED
 const { fetchOpenMeteo } = require("./weather-fetch");
 
 async function ensureWeatherCacheForField(field) {
