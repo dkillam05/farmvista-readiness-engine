@@ -1,6 +1,6 @@
 // ================================
 // FILE: services/weather-cache.js
-// PURPOSE: Fetch + build 30d history + 7d forecast (FIXED)
+// PURPOSE: Fetch + build 30d history + 7d forecast (CORRECT)
 // ================================
 
 const db = require("../config/firestore");
@@ -71,7 +71,6 @@ function buildDailyRows(data) {
       rainEveningIn: r.rainEveningIn,
       tempF: r.tempCount ? r.tempSum / r.tempCount : 50,
 
-      // temp defaults (unchanged)
       windMph: 6,
       rh: 65,
       solarWm2: 180,
@@ -89,15 +88,40 @@ function buildDailyRows(data) {
 // ================================
 async function ensureWeatherCacheForField(field) {
 
-  const start = getISO(-30);
-  const end = getISO(7);
+  const lat = field.lat;
+  const lng = field.lng;
 
-  // 🔥 THIS IS THE FIX
-  const url = `https://api.open-meteo.com/v1/forecast?latitude=${field.lat}&longitude=${field.lng}&start_date=${start}&end_date=${end}&hourly=temperature_2m,precipitation&timezone=America/Chicago`;
+  const histStart = getISO(-30);
+  const histEnd = getISO(-1);
+  const fcstEnd = getISO(7);
 
-  const data = await fetchOpenMeteo(url);
+  // 🔥 TRUE FIX: use correct APIs
+  const histUrl = `https://archive-api.open-meteo.com/v1/archive?latitude=${lat}&longitude=${lng}&start_date=${histStart}&end_date=${histEnd}&hourly=temperature_2m,precipitation&timezone=America/Chicago`;
 
-  const dailySeries = buildDailyRows(data);
+  const fcstUrl = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lng}&hourly=temperature_2m,precipitation&forecast_days=7&timezone=America/Chicago`;
+
+  const histData = await fetchOpenMeteo(histUrl);
+  const fcstData = await fetchOpenMeteo(fcstUrl);
+
+  // 🔥 MERGE HOURLY DATA
+  const merged = {
+    hourly: {
+      time: [
+        ...(histData?.hourly?.time || []),
+        ...(fcstData?.hourly?.time || [])
+      ],
+      temperature_2m: [
+        ...(histData?.hourly?.temperature_2m || []),
+        ...(fcstData?.hourly?.temperature_2m || [])
+      ],
+      precipitation: [
+        ...(histData?.hourly?.precipitation || []),
+        ...(fcstData?.hourly?.precipitation || [])
+      ]
+    }
+  };
+
+  const dailySeries = buildDailyRows(merged);
 
   await db.collection("field_weather_cache").doc(field.id).set({
     fieldId: field.id,
