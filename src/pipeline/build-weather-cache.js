@@ -1,5 +1,5 @@
 // FILE: /pipeline/build-weather-cache.js
-// FULL FIX: never returns empty usable data
+// FULL FIX: real-time weather, correct timestamps, no stale fallback
 
 const fetch = require("node-fetch");
 
@@ -33,7 +33,7 @@ function getPastDateISO(daysBack) {
 }
 
 /* ================================
-FETCH WEATHER
+FETCH WEATHER (FIXED)
 ================================ */
 async function fetchWeather(lat, lng) {
   const today = getTodayISO();
@@ -51,7 +51,7 @@ async function fetchWeather(lat, lng) {
   ].join(",");
 
   const histUrl = `${BASE_URL}?latitude=${lat}&longitude=${lng}&start_date=${start}&end_date=${today}&hourly=${hourlyFields}&timezone=auto`;
-  const fcstUrl = `${FORECAST_URL}?latitude=${lat}&longitude=${lng}&hourly=${hourlyFields}&forecast_days=2&timezone=auto`;
+  const fcstUrl = `${FORECAST_URL}?latitude=${lat}&longitude=${lng}&hourly=${hourlyFields}&forecast_days=3&timezone=auto`;
 
   let hist = null;
   let fcst = null;
@@ -59,10 +59,16 @@ async function fetchWeather(lat, lng) {
   try {
     const histRes = await fetch(histUrl);
     if (histRes.ok) hist = await histRes.json();
-  } catch {}
+  } catch (e) {
+    console.warn("[weather] archive failed");
+  }
 
-  const fcstRes = await fetch(fcstUrl);
-  fcst = await fcstRes.json();
+  try {
+    const fcstRes = await fetch(fcstUrl);
+    if (fcstRes.ok) fcst = await fcstRes.json();
+  } catch (e) {
+    console.warn("[weather] forecast failed");
+  }
 
   return {
     hourly: {
@@ -80,7 +86,7 @@ async function fetchWeather(lat, lng) {
 }
 
 /* ================================
-BUILD HOURLY
+BUILD HOURLY (FIXED: NO ZERO DEFAULTS)
 ================================ */
 function buildHourly(hourly) {
   const out = [];
@@ -89,9 +95,12 @@ function buildHourly(hourly) {
     const t = hourly.time[i];
     if (!t) continue;
 
+    const tempC = hourly.temperature_2m?.[i];
+    if (tempC == null) continue;
+
     out.push({
       time: t,
-      tempF: Math.round((hourly.temperature_2m?.[i] || 0) * 9 / 5 + 32),
+      tempF: Math.round(tempC * 9 / 5 + 32),
       rainIn: round((hourly.precipitation?.[i] || 0) / 25.4, 3),
       windMph: Math.round((hourly.wind_speed_10m?.[i] || 0) * 0.621371),
       rh: Math.round(hourly.relative_humidity_2m?.[i] || 0),
@@ -135,7 +144,7 @@ function buildDaily(hourlyRows) {
 }
 
 /* ================================
-MAIN BUILDER
+MAIN BUILDER (FIXED)
 ================================ */
 async function buildWeatherCache(field) {
   const data = await fetchWeather(field.lat, field.lng);
@@ -151,8 +160,14 @@ async function buildWeatherCache(field) {
   return {
     fieldId: field.id,
     location: { lat: field.lat, lng: field.lng },
+
     dailySeries: dailyHistory.length ? dailyHistory : dailyAll.slice(-30),
-    hourlySeries: hourlyToday.length ? hourlyToday : hourlyRows.slice(-48)
+
+    // 🔥 NEVER fallback to stale blindly
+    hourlySeries: hourlyToday,
+
+    // 🔥 CRITICAL FIX
+    weatherFetchedAt: new Date().toISOString()
   };
 }
 
