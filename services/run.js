@@ -4,7 +4,7 @@
 // ================================
 
 const { loadFields } = require("./fields");
-const buildWeather = require("./weather-cache");
+const { ensureWeatherCacheForField } = require("./weather-cache");
 const { runFieldReadinessCoreServer } = require("./readiness");
 
 async function runBatch(req) {
@@ -14,7 +14,7 @@ async function runBatch(req) {
 
   for (const f of fields) {
     try {
-      const wx = await buildWeather(f, req);
+      const wx = await ensureWeatherCacheForField(f, req);
 
       await runFieldReadinessCoreServer(
         wx.rows,
@@ -26,8 +26,6 @@ async function runBatch(req) {
       ok++;
     } catch (e) {
       fail++;
-
-      // 🔥 THIS IS THE IMPORTANT PART
       console.log("FIELD FAILED:", f.id);
       console.log(e.message);
     }
