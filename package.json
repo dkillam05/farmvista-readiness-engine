@@ -1,13 +1,13 @@
 {
-  "name": "farmvista-field-weather",
+  "name": "farmvista-readiness-engine",
   "version": "1.0.0",
+  "description": "FarmVista Field Readiness Engine (clean rebuild)",
   "main": "index.js",
   "type": "commonjs",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
-    "express": "^4.19.2",
     "firebase-admin": "^12.0.0"
   }
 }
