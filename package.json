@@ -1,5 +1,5 @@
 {
-  "name": "farmvista-weather-service",
+  "name": "farmvista-weather",
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
