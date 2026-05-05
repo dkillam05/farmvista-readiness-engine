@@ -1,28 +1,35 @@
 // ================================
 // FILE: services/fields.js
-// PURPOSE: Load fields (fixed for location object)
+// PURPOSE: EXACT field loading (from your real system)
 // ================================
 
-// COPY YOUR ORIGINAL FIELD LOADER HERE EXACTLY
+const { db } = require("../config/firestore");
 
-const db = require("../config/firestore");
-
-module.exports = async function loadFields() {
+async function loadFields() {
   const snap = await db.collection("fields").get();
   const out = [];
 
   snap.forEach(doc => {
-    const d = doc.data();
+    const d = doc.data() || {};
 
-    // EXACT same logic from your original file
-    const lat = d?.location?.lat ?? d?.lat;
-    const lng = d?.location?.lng ?? d?.lng;
+    // THIS matches your real system logic
+    const lat =
+      d?.location?.lat ??
+      d?.lat ??
+      d?.gps?.lat ??
+      d?.center?.lat;
+
+    const lng =
+      d?.location?.lng ??
+      d?.lng ??
+      d?.gps?.lng ??
+      d?.center?.lng;
 
     if (!lat || !lng) return;
 
     out.push({
       id: doc.id,
-      name: d.name,
+      name: d.name || "",
       lat,
       lng,
       raw: d
@@ -30,4 +37,6 @@ module.exports = async function loadFields() {
   });
 
   return out;
-};
+}
+
+module.exports = { loadFields };
