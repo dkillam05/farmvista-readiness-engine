@@ -1,6 +1,6 @@
 // ================================
 // FILE: services/fields.js
-// PURPOSE: LOAD FIELDS
+// PURPOSE: Load fields
 // ================================
 
 const { db } = require("../config/firestore");
