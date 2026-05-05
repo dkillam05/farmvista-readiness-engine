@@ -1,11 +1,9 @@
 // ================================
 // FILE: services/run.js
-// PURPOSE: Main batch flow
+// PURPOSE: Main batch flow (with error logging)
 // ================================
 
-// THIS IS YOUR "/" ROUTE LOGIC MOVED
-
-const { loadFields } = require("./fields");   // ✅ FIXED
+const { loadFields } = require("./fields");
 const buildWeather = require("./weather-cache");
 const { runFieldReadinessCoreServer } = require("./readiness");
 
@@ -28,6 +26,10 @@ async function runBatch(req) {
       ok++;
     } catch (e) {
       fail++;
+
+      // 🔥 THIS IS THE IMPORTANT PART
+      console.log("FIELD FAILED:", f.id);
+      console.log(e.message);
     }
   }
 
