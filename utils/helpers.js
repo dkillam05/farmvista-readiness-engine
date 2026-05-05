@@ -1,17 +1,15 @@
 // ================================
 // FILE: utils/helpers.js
-// PURPOSE: BASIC HELPERS
+// PURPOSE: Helpers
 // ================================
 
-// ⛔ COPY:
-// clamp
-// round
-// num
-// safeNum
-// isoDate
-// etc
+function clamp(n, lo, hi) {
+  return Math.max(lo, Math.min(hi, Number(n)));
+}
 
-module.exports = {
-  clamp,
-  round
-};
+function round(v, d = 2) {
+  const p = Math.pow(10, d);
+  return Math.round(Number(v) * p) / p;
+}
+
+module.exports = { clamp, round };
