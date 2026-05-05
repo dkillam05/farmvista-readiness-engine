@@ -5,6 +5,13 @@
 
 const { mmToIn } = require("../utils/helpers");
 
+function toISO(dateVal) {
+  if (!dateVal) return null;
+  const d = new Date(dateVal);
+  if (isNaN(d)) return null;
+  return d.toISOString().slice(0, 10);
+}
+
 function buildWeatherRows(wx, mrmsDoc, timezone) {
   const baseRows = Array.isArray(wx?.dailySeries) ? wx.dailySeries : [];
   if (!baseRows.length) return [];
@@ -18,27 +25,25 @@ function buildWeatherRows(wx, mrmsDoc, timezone) {
     }));
   }
 
-  // ✅ Build MRMS map
+  // ✅ Build MRMS map (normalized dates)
   const map = new Map();
   for (const r of mrmsDoc.mrmsDailySeries30d) {
-    const iso = String(r.dateISO || "").slice(0, 10);
+    const iso = toISO(r.dateISO);
     if (!iso) continue;
 
     const rainIn = mmToIn(r.rainMm || 0);
 
-    // 🔍 DEBUG (build side)
     console.log("MRMS MAP ADD", iso, rainIn);
 
     map.set(iso, rainIn);
   }
 
-  // ✅ Apply MRMS to rows
+  // ✅ Apply MRMS to rows (same normalization)
   return baseRows.map(r => {
-    const iso = String(r.dateISO || "").slice(0, 10);
+    const iso = toISO(r.dateISO);
 
     const mrmsRain = map.get(iso);
 
-    // 🔍 DEBUG (match check)
     console.log("MRMS CHECK", iso, mrmsRain);
 
     if (mrmsRain == null) {
