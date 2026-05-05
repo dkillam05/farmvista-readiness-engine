@@ -42,11 +42,13 @@ function buildWeatherRows(wxDoc, mrmsDoc, timezone) {
   return baseRows.map((r) => {
     const iso = String(r?.dateISO || "").slice(0, 10);
 
-    const isPast = iso < todayISO;
+    // 🔥 CHANGE IS HERE
+    const isFuture = iso > todayISO;
+
     const mrms = mrmsMap.get(iso);
 
-    // ✅ PAST → USE MRMS IF AVAILABLE
-    if (isPast && mrms) {
+    // ✅ PAST + TODAY → USE MRMS IF AVAILABLE
+    if (!isFuture && mrms) {
       return {
         ...r,
         rainInAdj: mrms.rainIn,
@@ -57,7 +59,7 @@ function buildWeatherRows(wxDoc, mrmsDoc, timezone) {
       };
     }
 
-    // ✅ TODAY + FUTURE → OPEN METEO
+    // ✅ FUTURE → OPEN METEO
     return {
       ...r,
       rainInAdj: r.rainIn,
