@@ -3,21 +3,22 @@
 // PURPOSE: Main batch flow
 // ================================
 
-const { loadFields } = require("./fields");
-const { ensureWeatherCacheForField } = require("./weather-cache");
+// THIS IS YOUR "/" ROUTE LOGIC MOVED
+
+const loadFields = require("./fields");
+const buildWeather = require("./weather-cache");
 const { runFieldReadinessCoreServer } = require("./readiness");
 
-async function runBatch() {
+async function runBatch(req) {
   const fields = await loadFields();
 
-  let ok = 0;
-  let fail = 0;
+  let ok = 0, fail = 0;
 
   for (const f of fields) {
     try {
-      const wx = await ensureWeatherCacheForField(f);
+      const wx = await buildWeather(f, req);
 
-      const snapshot = await runFieldReadinessCoreServer(
+      await runFieldReadinessCoreServer(
         wx.rows,
         wx.soilWetness,
         wx.drainageIndex,
@@ -26,17 +27,11 @@ async function runBatch() {
 
       ok++;
     } catch (e) {
-      console.log("fail", f.id, e.message);
       fail++;
     }
   }
 
-  return {
-    ok: true,
-    total: fields.length,
-    okCount: ok,
-    fail
-  };
+  return { ok: true, total: fields.length, okCount: ok, fail };
 }
 
 module.exports = { runBatch };
