@@ -104,23 +104,29 @@ async function runField({
     mode = "rebuild";
   }
 
-  const windowRows = buildWeatherWindow(weatherRows, mode);
+const windowRows = buildWeatherWindow(weatherRows, mode);
 
-  if (!windowRows.length) {
-    return {
-      ok: false,
-      reason: "no_weather_window"
-    };
-  }
+// 🔥 CRITICAL — enforce chronological order BEFORE anything else
+windowRows.sort((a, b) => {
+  return new Date(a.dateISO) - new Date(b.dateISO);
+});
 
-  let previousState = null;
+if (!windowRows.length) {
+  return {
+    ok: false,
+    reason: "no_weather_window"
+  };
+}
 
-  if (mode === "rolling" && latestDoc) {
-    previousState = {
-      storageFinal: Number(latestDoc.storageFinal),
-      surfaceFinal: Number(latestDoc.surfaceFinal || 0)
-    };
-  }
+let previousState = null;
+
+// 🔥 ONLY seed AFTER window is built + sorted
+if (mode === "rolling" && latestDoc) {
+  previousState = {
+    storageFinal: Number(latestDoc.storageFinal),
+    surfaceFinal: Number(latestDoc.surfaceFinal || 0)
+  };
+}
 
   const result = runReadinessEngine({
     weatherRows: windowRows,
