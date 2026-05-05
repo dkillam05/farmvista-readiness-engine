@@ -1,19 +1,23 @@
 // ================================
 // FILE: services/readiness.js
-// PURPOSE: Readiness calculation/write
+// PURPOSE: FULL READINESS MODEL
 // ================================
 
-const { db, admin } = require("../config/firestore");
+// 🚨 THIS FILE = 70% OF YOUR ORIGINAL INDEX
 
-async function writeReadiness(field) {
-  // placeholder — plug your real logic here later
-  await db.collection("field_readiness_latest").doc(field.id).set({
-    fieldId: field.id,
-    readiness: 50,
-    wetness: 50,
-    storageFinal: 1,
-    updatedAt: admin.firestore.FieldValue.serverTimestamp()
-  }, { merge: true });
-}
+// ⛔ COPY EVERYTHING BELOW EXACTLY:
+// - calcDryParts
+// - mapFactors
+// - effectiveRainInches
+// - storageDrydownMult
+// - surfaceStorage logic
+// - normalizeWeatherRowsForModel
+// - runFieldReadinessCoreServer
 
-module.exports = { writeReadiness };
+// ⚠️ DO NOT TOUCH ANYTHING
+// ⚠️ DO NOT SIMPLIFY
+// ⚠️ DO NOT CLEAN
+
+module.exports = {
+  runFieldReadinessCoreServer
+};
