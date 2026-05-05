@@ -1468,15 +1468,13 @@ function overlayMrmsRainOntoWeatherRows(baseRows, mrmsDoc) {
 }
 
 function buildModelWeatherRowsForServer(wxDoc, mrmsDoc) {
-  const baseRows = Array.isArray(wxDoc && wxDoc.dailySeries) ? wxDoc.dailySeries.slice() : [];
-  if (!baseRows.length) return [];
+  const { buildWeatherRows } = require("./js/weather-row-builder");
 
-  const mrmsReady = mrmsBackfillReadyServer(mrmsDoc);
-  if (!mrmsReady) {
-    return withRainSource(baseRows, "open-meteo");
-  }
-
-  return overlayMrmsRainOntoWeatherRows(baseRows, mrmsDoc);
+  return buildWeatherRows(
+    wxDoc,
+    mrmsDoc,
+    "America/Chicago"
+  );
 }
 
 function closedDayRowsOnly(rows, timezone) {
