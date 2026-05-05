@@ -1,6 +1,6 @@
 // ================================
 // FILE: services/run.js
-// PURPOSE: Main batch flow + WRITE readiness
+// PURPOSE: Main batch flow + WRITE readiness + DEBUG
 // ================================
 
 const { loadFields } = require("./fields");
@@ -18,6 +18,13 @@ async function runBatch(req) {
     try {
       const wx = await ensureWeatherCacheForField(f, req);
 
+      // 🔥 DEBUG WEATHER INPUT
+      console.log("================================");
+      console.log("FIELD:", f.id);
+      console.log("FIRST ROW:", JSON.stringify(wx.rows?.[0] || null));
+      console.log("LAST ROW:", JSON.stringify(wx.rows?.[wx.rows.length - 1] || null));
+      console.log("================================");
+
       const result = await runFieldReadinessCoreServer(
         wx.rows,
         wx.soilWetness,
@@ -25,7 +32,6 @@ async function runBatch(req) {
         wx.latestDoc
       );
 
-      // 🔥 WRITE TO FIRESTORE
       if (result) {
         await db.collection("field_readiness_latest").doc(f.id).set({
           fieldId: f.id,
@@ -36,7 +42,6 @@ async function runBatch(req) {
             lng: f.lng
           },
 
-          // === READINESS OUTPUT ===
           readiness: result.readiness,
           readinessR: result.readinessR,
           wetness: result.wetness,
@@ -45,10 +50,8 @@ async function runBatch(req) {
           storageFinal: result.storageFinal,
           surfaceFinal: result.surfaceFinal,
 
-          // === DEBUG / TRACE ===
           rows: result.rows || [],
 
-          // === META ===
           seedSource: result.seedSource || null,
           computedAt: admin.firestore.FieldValue.serverTimestamp(),
 
