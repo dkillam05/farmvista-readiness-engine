@@ -14,6 +14,7 @@
 // ✅ FIX: writes current rows/trace into field_readiness_latest so details panel stays current
 
 const express = require("express");
+const { attachDebugRoutes } = require("./debug");
 
 // ================================
 // APP SETUP
