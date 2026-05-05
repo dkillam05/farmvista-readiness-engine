@@ -1,11 +1,20 @@
 // ================================
 // FILE: services/weather-cache.js
-// PURPOSE: Fetch + build MODEL-READY weather rows
+// PURPOSE: Fetch + build 30d history + 7d forecast (FIXED)
 // ================================
 
 const db = require("../config/firestore");
 const admin = require("firebase-admin");
 const { fetchOpenMeteo } = require("./weather-fetch");
+
+// ================================
+// DATE HELPERS
+// ================================
+function getISO(daysOffset = 0) {
+  const d = new Date();
+  d.setDate(d.getDate() + daysOffset);
+  return d.toISOString().slice(0, 10);
+}
 
 // ================================
 // BUILD DAILY ROWS FROM HOURLY
@@ -41,10 +50,8 @@ function buildDailyRows(data) {
     const tempC = h.temperature_2m?.[i] || 0;
     const tempF = (tempC * 9 / 5) + 32;
 
-    // total rain
     row.rainIn += rainIn;
 
-    // split by time of day
     if (hour < 11) row.rainMorningIn += rainIn;
     else if (hour < 17) row.rainMiddayIn += rainIn;
     else row.rainEveningIn += rainIn;
@@ -53,7 +60,6 @@ function buildDailyRows(data) {
     row.tempCount++;
   }
 
-  // finalize rows
   const out = [];
 
   for (const r of map.values()) {
@@ -63,10 +69,9 @@ function buildDailyRows(data) {
       rainMorningIn: r.rainMorningIn,
       rainMiddayIn: r.rainMiddayIn,
       rainEveningIn: r.rainEveningIn,
-
       tempF: r.tempCount ? r.tempSum / r.tempCount : 50,
 
-      // 🔥 TEMP DEFAULTS (we wire real later)
+      // temp defaults (unchanged)
       windMph: 6,
       rh: 65,
       solarWm2: 180,
@@ -75,9 +80,7 @@ function buildDailyRows(data) {
     });
   }
 
-  // sort ascending by date
   out.sort((a, b) => a.dateISO.localeCompare(b.dateISO));
-
   return out;
 }
 
@@ -86,7 +89,11 @@ function buildDailyRows(data) {
 // ================================
 async function ensureWeatherCacheForField(field) {
 
-  const url = `https://api.open-meteo.com/v1/forecast?latitude=${field.lat}&longitude=${field.lng}&hourly=temperature_2m,precipitation&timezone=America/Chicago`;
+  const start = getISO(-30);
+  const end = getISO(7);
+
+  // 🔥 THIS IS THE FIX
+  const url = `https://api.open-meteo.com/v1/forecast?latitude=${field.lat}&longitude=${field.lng}&start_date=${start}&end_date=${end}&hourly=temperature_2m,precipitation&timezone=America/Chicago`;
 
   const data = await fetchOpenMeteo(url);
 
