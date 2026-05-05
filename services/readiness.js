@@ -140,12 +140,12 @@ async function runFieldReadinessCoreServer(
     const wetness = (storage / Smax) * 100;
     readiness = clamp(100 - wetness - surface * 20, 0, 100);
 
-    trace.push({
-      dateISO: r.dateISO,
-      storage,
-      surface,
-      readiness
-    });
+trace.push({
+  dateISO: r.time || null,   // ✅ FIX
+  storage,
+  surface,
+  readiness
+});
   }
 
   const final = trace[trace.length - 1];
