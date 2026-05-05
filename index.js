@@ -2400,28 +2400,15 @@ if (weatherRows?.length) {
   });
 }
 
-      if (!weatherRows.length) {
-        const normalized = wx.normalized || null;
-        if (normalized) {
-          const hourlyCore = Array.isArray(normalized.hourly) ? normalized.hourly : [];
-          const hourlyExt = Array.isArray(normalized.hourly_ext) ? normalized.hourly_ext : [];
-          const dailyArr = Array.isArray(normalized.daily) ? normalized.daily : [];
+if (!weatherRows.length) {
+  console.error("[WEATHER] FAILED to build weatherRows for field:", f.id);
 
-          const split = aggregateHourlyToDailySplit(
-            hourlyCore,
-            hourlyExt,
-            dailyArr,
-            timezone,
-            DEFAULT_PAST_DAYS,
-            DEFAULT_FORECAST_DAYS_BATCH
-          );
+  // 🚨 HARD STOP — do NOT fallback to Open-Meteo logic
+  // This prevents MRMS from being bypassed
 
-          weatherRows = buildModelWeatherRowsForServer(
-            { dailySeries: split.hist },
-            mrmsMap.get(String(f.id)) || null
-          );
-        }
-      }
+  fail++;
+  continue;
+}
 
       if (!weatherRows.length) {
         fail++;
