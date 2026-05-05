@@ -1,6 +1,6 @@
 // ================================
 // FILE: index.js
-// PURPOSE: ENTRY + ROUTES ONLY
+// PURPOSE: Routes + entry point
 // ================================
 
 const express = require("express");
@@ -16,12 +16,10 @@ app.get("/", async (req, res) => {
     const out = await runBatch(req);
     return res.json(out);
   }
-  res.send("OK");
+  res.send("FarmVista Weather OK");
 });
 
-app.get("/healthz", (req, res) => {
-  res.send("ok");
-});
+app.get("/healthz", (req, res) => res.send("ok"));
 
 app.listen(PORT, () => {
   console.log(`Server running on ${PORT}`);
