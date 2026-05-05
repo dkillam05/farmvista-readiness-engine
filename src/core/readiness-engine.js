@@ -1,5 +1,5 @@
 // FILE: /core/readiness-engine.js
-// FULL RESTORE: OLD INDEX MATH (WORKING + COMPLETE)
+// FULL FIX: OLD INDEX MATH + CORRECT HOURLY HANDLING + DEDUPE
 
 function clamp(n, lo, hi) {
   const v = Number(n);
@@ -22,8 +22,49 @@ function pickNumber(...vals) {
   return 0;
 }
 
+function isHourlyRow(row) {
+  return typeof row?.dateISO === "string" && row.dateISO.length > 10;
+}
+
 /* ============================================================
-DRY POWER (matches old index behavior)
+🔥 NEW: DEDUPE + AGGREGATE HOURLY ROWS
+============================================================ */
+function normalizeRows(rows) {
+  const map = new Map();
+
+  for (const r of rows) {
+    if (!r?.dateISO) continue;
+
+    const key = r.dateISO;
+
+    if (!map.has(key)) {
+      map.set(key, {
+        dateISO: key,
+        tempF: pickNumber(r.tempF, r.tempAvg),
+        windMph: pickNumber(r.windMph, r.windAvg),
+        rh: pickNumber(r.rh, r.rhAvg),
+        solarWm2: pickNumber(r.solarWm2, r.solarAvg),
+        rainIn: pickNumber(r.rainIn, r.rainTotal)
+      });
+    } else {
+      // 🔥 MERGE DUPLICATES (this is the critical fix)
+      const existing = map.get(key);
+
+      existing.rainIn += pickNumber(r.rainIn, r.rainTotal);
+
+      // average other fields
+      existing.tempF = (existing.tempF + pickNumber(r.tempF, r.tempAvg)) / 2;
+      existing.windMph = (existing.windMph + pickNumber(r.windMph, r.windAvg)) / 2;
+      existing.rh = (existing.rh + pickNumber(r.rh, r.rhAvg)) / 2;
+      existing.solarWm2 = (existing.solarWm2 + pickNumber(r.solarWm2, r.solarAvg)) / 2;
+    }
+  }
+
+  return Array.from(map.values());
+}
+
+/* ============================================================
+DRY POWER (UNCHANGED)
 ============================================================ */
 function calcDryPower(row) {
   const temp = pickNumber(row.tempF, row.tempAvg);
@@ -46,54 +87,50 @@ function calcDryPower(row) {
 }
 
 /* ============================================================
-EFFECTIVE RAIN (nonlinear saturation)
+EFFECTIVE RAIN (UNCHANGED)
 ============================================================ */
 function effectiveRain(rain, storage, Smax) {
   if (!rain || rain <= 0) return 0;
 
   const sat = clamp(storage / Smax, 0, 1);
-
-  // old index style runoff curve
   const runoff = Math.pow(sat, 2.2);
 
   return rain * (1 - runoff);
 }
 
 /* ============================================================
-SURFACE SYSTEM (matches old index behavior)
+SURFACE SYSTEM (FIXED FOR HOURLY)
 ============================================================ */
-function updateSurface(surface, rain, dry) {
+function updateSurface(surface, rain, dry, stepFactor) {
   surface += rain * 2.2;
 
-  const dryLoss = 0.02 + (dry * 0.28);
+  const dryLoss = (0.02 + (dry * 0.28)) * stepFactor;
   surface -= dryLoss;
 
   return clamp(surface, 0, 1.2);
 }
 
 /* ============================================================
-STORAGE SYSTEM
+STORAGE SYSTEM (FIXED FOR HOURLY)
 ============================================================ */
-function updateStorage(storage, rainEff, dry, Smax) {
+function updateStorage(storage, rainEff, dry, Smax, stepFactor) {
   storage += rainEff;
 
-  const loss = 0.02 + (dry * 0.15);
+  const loss = (0.02 + (dry * 0.15)) * stepFactor;
   storage -= loss;
 
   return clamp(storage, 0, Smax);
 }
 
 /* ============================================================
-FINAL READINESS (OLD INDEX STYLE — NONLINEAR)
+READINESS (UNCHANGED)
 ============================================================ */
 function calcReadiness(storage, surface, Smax) {
   const sFrac = clamp(storage / Smax, 0, 1);
 
-  // nonlinear soil penalty
   let readiness = 100 * (1 - sFrac);
   readiness *= (1 - Math.pow(sFrac, 1.3));
 
-  // surface penalty (key piece from old model)
   const surfFrac = clamp(surface / 1.2, 0, 1);
   const surfPenalty = surfFrac * 55;
 
@@ -103,7 +140,7 @@ function calcReadiness(storage, surface, Smax) {
 }
 
 /* ============================================================
-MAIN ENGINE (FULLY RESTORED)
+MAIN ENGINE
 ============================================================ */
 function runReadinessEngine({
   weatherRows,
@@ -115,7 +152,9 @@ function runReadinessEngine({
     return null;
   }
 
-  // SORT REQUIRED
+  // 🔥 FIX: normalize duplicates first
+  weatherRows = normalizeRows(weatherRows);
+
   weatherRows.sort((a, b) => new Date(a.dateISO) - new Date(b.dateISO));
 
   const Smax = clamp(
@@ -141,13 +180,18 @@ function runReadinessEngine({
   const trace = [];
 
   for (const row of weatherRows) {
-    const rain = pickNumber(row.rainIn, row.rainTotal);
+    const hourly = isHourlyRow(row);
+    const stepFactor = hourly ? (1 / 24) : 1;
+
+    const rainRaw = pickNumber(row.rainIn, row.rainTotal);
+    const rain = hourly ? rainRaw : rainRaw; // already hourly-safe after dedupe
+
     const dry = calcDryPower(row);
 
     const rainEff = effectiveRain(rain, storage, Smax);
 
-    surface = updateSurface(surface, rain, dry);
-    storage = updateStorage(storage, rainEff, dry, Smax);
+    surface = updateSurface(surface, rain, dry, stepFactor);
+    storage = updateStorage(storage, rainEff, dry, Smax, stepFactor);
 
     const readiness = calcReadiness(storage, surface, Smax);
 
