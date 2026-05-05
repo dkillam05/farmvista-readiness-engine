@@ -1,9 +1,9 @@
 // ================================
 // FILE: services/fields.js
-// PURPOSE: EXACT field loading (from your real system)
+// PURPOSE: Load fields (FIXED DB IMPORT)
 // ================================
 
-const { db } = require("../config/firestore");
+const db = require("../config/firestore");   // ✅ FIXED (no destructuring)
 
 async function loadFields() {
   const snap = await db.collection("fields").get();
@@ -12,7 +12,6 @@ async function loadFields() {
   snap.forEach(doc => {
     const d = doc.data() || {};
 
-    // THIS matches your real system logic
     const lat =
       d?.location?.lat ??
       d?.lat ??
