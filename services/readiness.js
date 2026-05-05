@@ -1,16 +1,15 @@
 // ================================
 // FILE: services/readiness.js
-// PURPOSE: FULL readiness engine (ported from original index)
+// PURPOSE: Improved readiness engine (closer to original behavior)
 // ================================
 
 const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
-const num = (v, d = 0) => (Number.isFinite(Number(v)) ? Number(v) : d);
 
 // ================================
-// GLOBAL MULT (keep same behavior)
+// GLOBAL MULT
 // ================================
 async function loadGlobalStorageMult() {
-  return 1.0; // keep simple for now (same as your fallback)
+  return 1.0;
 }
 
 // ================================
@@ -27,7 +26,7 @@ function calcDryParts(r) {
   const solarN = clamp((solar - 60) / 300, 0, 1);
   const rhN = clamp((rh - 35) / 65, 0, 1);
 
-  let dryPwr = clamp(
+  const dryPwr = clamp(
     0.35 * tempN +
     0.3 * solarN +
     0.25 * windN -
@@ -36,7 +35,7 @@ function calcDryParts(r) {
     1
   );
 
-  return { dryPwr, tempN, windN, solarN, rhN };
+  return { dryPwr };
 }
 
 // ================================
@@ -60,14 +59,12 @@ function mapFactors(soilWetness, drainageIndex) {
 // ================================
 function normalizeWeatherRows(rows) {
   return (rows || []).map(r => {
-    const rain = Number(r.rainInAdj ?? r.rainIn ?? 0);
-
-    const parts = calcDryParts(r);
+    const rain = Number(r.rainInAdj ?? r.rainIn ?? r.rain ?? 0);
 
     return {
       ...r,
       rainInAdj: rain,
-      ...parts
+      ...calcDryParts(r)
     };
   });
 }
@@ -100,7 +97,7 @@ async function runFieldReadinessCoreServer(
     storage = 0.10 * Smax;
   }
 
-  const globalMult = await loadGlobalStorageMult();
+  await loadGlobalStorageMult();
 
   let surface = 0;
   let readiness = 50;
@@ -108,21 +105,24 @@ async function runFieldReadinessCoreServer(
   const trace = [];
 
   // ================================
-  // LOOP DAYS
+  // LOOP
   // ================================
   for (const r of rows) {
     const rain = Number(r.rainInAdj || 0);
     const dry = Number(r.dryPwr || 0);
 
     // ================================
-    // RAIN → STORAGE
+    // 🌧️ RAIN (improved realism)
     // ================================
-    storage += rain * 0.6;
+    const effectiveRain =
+      rain * (0.35 + (1 - f.drainPoor) * 0.25);
+
+    storage += effectiveRain;
 
     // ================================
-    // DRYDOWN
+    // ☀️ DRYDOWN (slower + drainage aware)
     // ================================
-    storage -= dry * 0.25;
+    storage -= dry * 0.12 * (1 + f.drainPoor);
 
     // ================================
     // CLAMP STORAGE
@@ -130,22 +130,40 @@ async function runFieldReadinessCoreServer(
     storage = clamp(storage, 0, Smax);
 
     // ================================
-    // SURFACE (simple for now)
+    // 🌧️ SURFACE WATER (stronger effect)
     // ================================
-    surface = clamp(surface + rain * 0.5 - dry * 0.2, 0, 1);
+    surface = clamp(
+      surface + rain * 0.8 - dry * 0.15,
+      0,
+      1.5
+    );
 
     // ================================
-    // READINESS
+    // 🌱 STORAGE → WETNESS CURVE (non-linear)
     // ================================
-    const wetness = (storage / Smax) * 100;
-    readiness = clamp(100 - wetness - surface * 20, 0, 100);
+    const wetness =
+      Math.pow(storage / Smax, 0.7) * 100;
 
-trace.push({
-  dateISO: r.time || null,   // ✅ FIX
-  storage,
-  surface,
-  readiness
-});
+    // ================================
+    // 🧱 SURFACE PENALTY (strong)
+    // ================================
+    const surfacePenalty = surface * 35;
+
+    // ================================
+    // FINAL READINESS
+    // ================================
+    readiness = clamp(
+      100 - wetness - surfacePenalty,
+      0,
+      100
+    );
+
+    trace.push({
+      dateISO: r.time || null,
+      storage,
+      surface,
+      readiness
+    });
   }
 
   const final = trace[trace.length - 1];
