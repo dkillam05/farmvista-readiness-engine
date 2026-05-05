@@ -1,6 +1,3 @@
-// FILE: /data/firestore-client.js
-// FULL FIX: correct daily mapping + smart fallback + stable hourly blending
-
 const admin = require("firebase-admin");
 
 if (!admin.apps.length) {
@@ -13,9 +10,6 @@ const FIELDS = "fields";
 const WEATHER = "field_weather_cache";
 const LATEST = "field_readiness_latest";
 
-/* ================================
-HELPERS
-================================ */
 function getTodayISO() {
   return new Date().toISOString().slice(0, 10);
 }
@@ -51,11 +45,10 @@ async function getFields() {
 }
 
 /* ================================
-GET WEATHER (🔥 REAL FIX)
+GET WEATHER (🔥 FIXED LIKE OLD INDEX)
 ================================ */
 async function getWeather(fieldId) {
   const snap = await db.collection(WEATHER).doc(fieldId).get();
-
   if (!snap.exists) return [];
 
   const d = snap.data() || {};
@@ -65,69 +58,40 @@ async function getWeather(fieldId) {
 
   const today = getTodayISO();
 
-  /* -------------------------------------------------
-  🔥 FIX #1: MAP DAILY CORRECTLY (YOUR REAL STRUCTURE)
-  ------------------------------------------------- */
-  const cleanDaily = daily
-    .filter(r => {
-      return (
-        r &&
-        (
-          Number(r.tempAvg) > 0 ||
-          Number(r.rainTotal) > 0 ||
-          Number(r.windAvg) > 0 ||
-          Number(r.rhAvg) > 0
-        )
-      );
-    })
-    .map(r => ({
-      dateISO: r.dateISO,
+  const rows = [];
 
-      // ✅ CORRECT MAPPING
+  // ✅ DAILY HISTORY
+  for (const r of daily) {
+    if (!r || !r.dateISO) continue;
+
+    rows.push({
+      dateISO: r.dateISO,
       tempF: Number(r.tempAvg || 0),
       windMph: Number(r.windAvg || 0),
       rh: Number(r.rhAvg || 0),
       solarWm2: Number(r.solarAvg || 0),
       rainIn: Number(r.rainTotal || 0)
-    }))
-    .slice(-30);
+    });
+  }
 
-  /* -------------------------------------------------
-  🔥 FIX #2: TODAY = HOURLY ROLLING (NOT DAILY)
-  ------------------------------------------------- */
-  const todayHourly = hourly
-    .filter(h => h.time?.startsWith(today))
-    .map(h => ({
+  // ✅ HOURLY TODAY
+  for (const h of hourly) {
+    if (!h.time || !h.time.startsWith(today)) continue;
+
+    rows.push({
       dateISO: h.time,
       tempF: Number(h.tempF || 0),
       windMph: Number(h.windMph || 0),
       rh: Number(h.rh || 0),
       solarWm2: Number(h.solarWm2 || 0),
       rainIn: Number(h.rainIn || 0)
-    }));
-
-  /* -------------------------------------------------
-  🔥 FIX #3: IF DAILY IS BAD → USE HOURLY HISTORY
-  ------------------------------------------------- */
-  if (!cleanDaily.length) {
-    const fallbackHourly = hourly
-      .slice(-72)
-      .map(h => ({
-        dateISO: h.time,
-        tempF: Number(h.tempF || 0),
-        windMph: Number(h.windMph || 0),
-        rh: Number(h.rh || 0),
-        solarWm2: Number(h.solarWm2 || 0),
-        rainIn: Number(h.rainIn || 0)
-      }));
-
-    return fallbackHourly;
+    });
   }
 
-  /* -------------------------------------------------
-  🔥 FINAL RETURN (HISTORY + LIVE TODAY)
-  ------------------------------------------------- */
-  return [...cleanDaily, ...todayHourly];
+  // 🔥 CRITICAL — SORT TIME (MATCH OLD INDEX BEHAVIOR)
+  rows.sort((a, b) => new Date(a.dateISO) - new Date(b.dateISO));
+
+  return rows;
 }
 
 /* ================================
@@ -145,9 +109,7 @@ GET LATEST
 ================================ */
 async function getLatest(fieldId) {
   const snap = await db.collection(LATEST).doc(fieldId).get();
-
   if (!snap.exists) return null;
-
   return snap.data() || null;
 }
 
@@ -161,24 +123,15 @@ async function writeResult(result) {
 
   await ref.set({
     fieldId: result.fieldId,
-
-    // CORE VALUES
     readiness: result.readiness,
     wetness: result.wetness,
     storageFinal: result.storageFinal,
     surfaceFinal: result.surfaceFinal,
-
-    // ENGINE META
     seedSource: result.seedSource,
     Smax: result.Smax,
-
-    // REQUIRED FOR UI
     asOfDateISO: todayISO,
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-
-    // debug
-    mode: result.mode,
-
+    mode: result.mode
   }, { merge: true });
 }
 
