@@ -47,8 +47,39 @@ const IS_DEV = process.env.NODE_ENV !== "production";
 app.get("/", async (req, res) => {
   if (req.query.run === "1") {
     try {
-      const result = await runBatch(req);
-      return res.json(result);
+      const timezone = String(req.query.timezone || "America/Chicago");
+
+      const cacheOpts = {
+        days: 30,
+        timezone,
+        forecast_days: 7,
+        gdu_base_f: 50,
+        gdu_cap_f: 86
+      };
+
+      // 🔥 STEP 1: BUILD WEATHER
+      const weather = await runBatchCache(cacheOpts);
+
+      // 🔥 STEP 2: BUILD READINESS
+      const runKey = makeRunKey(timezone);
+
+      const readiness = await writeReadinessForFields(
+        weather.fields,
+        runKey,
+        timezone,
+        cacheOpts
+      );
+
+      // 🔥 FINAL RESPONSE
+      return res.json({
+        ok: true,
+        mode: "batch_cache_plus_readiness",
+        ranAt: new Date().toISOString(),
+        runKey,
+        weather,
+        readiness
+      });
+
     } catch (e) {
       return res.json({ error: e.message });
     }
