@@ -1,7 +1,6 @@
 // ============================================
 // FILE: helpers.js
-// PURPOSE: Shared utility helpers used across
-//          weather, readiness, firestore, etc.
+// PURPOSE: Shared utilities
 // ============================================
 
 function num(v, d = null) {
@@ -33,16 +32,4 @@ function mmToIn(mm) {
   return Number(mm || 0) / 25.4;
 }
 
-function isoDate(d) {
-  return d.toISOString().slice(0, 10);
-}
-
-module.exports = {
-  num,
-  clamp,
-  round,
-  safeStr,
-  safeNum,
-  mmToIn,
-  isoDate
-};
+module.exports = { num, clamp, round, safeStr, safeNum, mmToIn };
