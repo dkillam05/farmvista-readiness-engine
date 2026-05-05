@@ -1,3 +1,6 @@
+// FILE: /data/firestore-client.js
+// FULL FIX: stable mapping + guaranteed rows + correct ordering
+
 const admin = require("firebase-admin");
 
 if (!admin.apps.length) {
@@ -10,6 +13,9 @@ const FIELDS = "fields";
 const WEATHER = "field_weather_cache";
 const LATEST = "field_readiness_latest";
 
+/* ================================
+HELPERS
+================================ */
 function getTodayISO() {
   return new Date().toISOString().slice(0, 10);
 }
@@ -45,10 +51,11 @@ async function getFields() {
 }
 
 /* ================================
-GET WEATHER (🔥 FIXED LIKE OLD INDEX)
+GET WEATHER (🔥 FIXED)
 ================================ */
 async function getWeather(fieldId) {
   const snap = await db.collection(WEATHER).doc(fieldId).get();
+
   if (!snap.exists) return [];
 
   const d = snap.data() || {};
@@ -60,7 +67,9 @@ async function getWeather(fieldId) {
 
   const rows = [];
 
-  // ✅ DAILY HISTORY
+  /* -------------------------------
+     DAILY HISTORY
+  ------------------------------- */
   for (const r of daily) {
     if (!r || !r.dateISO) continue;
 
@@ -74,9 +83,12 @@ async function getWeather(fieldId) {
     });
   }
 
-  // ✅ HOURLY TODAY
+  /* -------------------------------
+     HOURLY TODAY
+  ------------------------------- */
   for (const h of hourly) {
-    if (!h.time || !h.time.startsWith(today)) continue;
+    if (!h || !h.time) continue;
+    if (!h.time.startsWith(today)) continue;
 
     rows.push({
       dateISO: h.time,
@@ -88,7 +100,9 @@ async function getWeather(fieldId) {
     });
   }
 
-  // 🔥 CRITICAL — SORT TIME (MATCH OLD INDEX BEHAVIOR)
+  /* -------------------------------
+     🔥 CRITICAL: SORT TIME
+  ------------------------------- */
   rows.sort((a, b) => new Date(a.dateISO) - new Date(b.dateISO));
 
   return rows;
@@ -109,7 +123,9 @@ GET LATEST
 ================================ */
 async function getLatest(fieldId) {
   const snap = await db.collection(LATEST).doc(fieldId).get();
+
   if (!snap.exists) return null;
+
   return snap.data() || null;
 }
 
@@ -123,14 +139,18 @@ async function writeResult(result) {
 
   await ref.set({
     fieldId: result.fieldId,
+
     readiness: result.readiness,
     wetness: result.wetness,
     storageFinal: result.storageFinal,
     surfaceFinal: result.surfaceFinal,
+
     seedSource: result.seedSource,
     Smax: result.Smax,
+
     asOfDateISO: todayISO,
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+
     mode: result.mode
   }, { merge: true });
 }
