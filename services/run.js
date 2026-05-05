@@ -1,6 +1,6 @@
 // ================================
 // FILE: services/run.js
-// PURPOSE: Main batch flow (FULL RESTORE)
+// PURPOSE: Main batch flow (SAFE + WORKING)
 // ================================
 
 const { loadFields } = require("./fields");
@@ -15,7 +15,6 @@ async function runBatch(req) {
 
   for (const f of fields) {
     try {
-      // 🔥 READ WEATHER CACHE (REAL SOURCE)
       const wxSnap = await db.collection("field_weather_cache").doc(f.id).get();
 
       if (!wxSnap.exists) {
@@ -25,7 +24,9 @@ async function runBatch(req) {
       }
 
       const wx = wxSnap.data() || {};
-      const rows = wx.dailySeries || [];
+
+      // 🔥 KEY FIX (fallback)
+      const rows = wx.dailySeries || wx.rows || [];
 
       if (!rows.length) {
         console.log("NO ROWS:", f.id);
@@ -33,7 +34,6 @@ async function runBatch(req) {
         continue;
       }
 
-      // 🔥 READ EXISTING STATE (ROLLING STORAGE)
       const latestSnap = await db
         .collection("field_readiness_latest")
         .doc(f.id)
@@ -41,10 +41,9 @@ async function runBatch(req) {
 
       const latestDoc = latestSnap.exists ? latestSnap.data() : null;
 
-      // 🔥 RUN REAL MODEL
       const result = await runFieldReadinessCoreServer(
         rows,
-        60,  // temp default (we’ll wire real later)
+        60,
         45,
         latestDoc
       );
@@ -55,7 +54,6 @@ async function runBatch(req) {
         continue;
       }
 
-      // 🔥 WRITE OUTPUT
       await db.collection("field_readiness_latest").doc(f.id).set({
         fieldId: f.id,
 
