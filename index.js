@@ -15,11 +15,38 @@
 
 const express = require("express");
 
+// ================================
+// APP SETUP
+// ================================
+
+const express = require("express");
 const app = express();
+
 app.disable("x-powered-by");
 
+// Optional but safe defaults
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// ================================
+// ENV / CONFIG
+// ================================
+
 const PORT = process.env.PORT || 8080;
+
+// Open-Meteo does NOT require a key, but we keep this for future flexibility
 const OPEN_METEO_API_KEY = (process.env.OPEN_METEO_API_KEY || "").trim();
+
+// Optional debug flag (useful later)
+const IS_DEV = process.env.NODE_ENV !== "production";
+
+// ================================
+// BASIC HEALTH CHECK (recommended)
+// ================================
+
+app.get("/", (req, res) => {
+  res.send("FarmVista Weather Service Running");
+});
 
 // Optional: lock CORS to your domains (comma-separated).
 const ALLOWED = (process.env.FV_ALLOWED_ORIGINS || "")
