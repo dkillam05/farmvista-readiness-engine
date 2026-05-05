@@ -1,7 +1,32 @@
 // ================================
 // FILE: weather-row-builder.js
-// PURPOSE: Clean MRMS + Forecast merge
+// PURPOSE: Clean MRMS + Forecast merge (FIXED)
 // ================================
+
+function buildMrmsDailyMapRows(mrmsDoc) {
+  const map = new Map();
+
+  const rows = Array.isArray(mrmsDoc?.mrmsDailySeries30d)
+    ? mrmsDoc.mrmsDailySeries30d
+    : [];
+
+  for (const r of rows) {
+    const iso = String(r?.dateISO || "").slice(0, 10);
+    if (!iso) continue;
+
+    const rainMm = Number(r?.rainMm || 0);
+    const rainIn = rainMm / 25.4;
+
+    map.set(iso, {
+      dateISO: iso,
+      rainMm,
+      rainIn,
+      hoursCount: Number(r?.hoursCount || 0)
+    });
+  }
+
+  return map;
+}
 
 function buildWeatherRows(wxDoc, mrmsDoc, timezone) {
   const baseRows = Array.isArray(wxDoc?.dailySeries)
