@@ -44,7 +44,16 @@ const IS_DEV = process.env.NODE_ENV !== "production";
 // BASIC HEALTH CHECK (recommended)
 // ================================
 
-app.get("/", (req, res) => {
+app.get("/", async (req, res) => {
+  if (req.query.run === "1") {
+    try {
+      const result = await runBatch(req);
+      return res.json(result);
+    } catch (e) {
+      return res.json({ error: e.message });
+    }
+  }
+
   res.send("FarmVista Weather Service Running");
 });
 
