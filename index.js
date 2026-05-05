@@ -1,10 +1,11 @@
 // ================================
 // FILE: index.js
-// PURPOSE: Entry + debug endpoint
+// PURPOSE: Entry + debug endpoint (FIXED)
 // ================================
 
 const express = require("express");
 const { runBatch } = require("./services/run");
+const db = require("./config/firestore");
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -20,7 +21,7 @@ app.get("/", async (req, res) => {
 });
 
 // ================================
-// DEBUG SINGLE FIELD
+// DEBUG SINGLE FIELD (FIXED)
 // ================================
 app.get("/debug", async (req, res) => {
   try {
@@ -30,38 +31,41 @@ app.get("/debug", async (req, res) => {
       return res.json({ error: "missing fieldId" });
     }
 
-    const { loadFields } = require("./services/fields");
-    const { ensureWeatherCacheForField } = require("./services/weather-cache");
     const { runFieldReadinessCoreServer } = require("./services/readiness");
 
-    const fields = await loadFields();
-    const f = fields.find(x => x.id === fieldId);
+    // 🔥 READ FROM SAME SOURCE AS run.js
+    const wxSnap = await db.collection("field_weather_cache").doc(fieldId).get();
 
-    if (!f) {
-      return res.json({ error: "field not found" });
+    if (!wxSnap.exists) {
+      return res.json({ error: "no weather cache" });
     }
 
-    const wx = await ensureWeatherCacheForField(f, req);
+    const wx = wxSnap.data() || {};
+
+    const rows = wx.dailySeries || wx.rows || [];
+
+    // 🔥 READ EXISTING STATE
+    const latestSnap = await db
+      .collection("field_readiness_latest")
+      .doc(fieldId)
+      .get();
+
+    const latestDoc = latestSnap.exists ? latestSnap.data() : null;
 
     const result = await runFieldReadinessCoreServer(
-      wx.rows,
-      wx.soilWetness,
-      wx.drainageIndex,
-      wx.latestDoc
+      rows,
+      60,
+      45,
+      latestDoc
     );
 
     return res.json({
-      field: {
-        id: f.id,
-        name: f.name,
-        lat: f.lat,
-        lng: f.lng
-      },
+      fieldId,
 
       sampleInput: {
-        firstRow: wx.rows?.[0] || null,
-        lastRow: wx.rows?.[wx.rows.length - 1] || null,
-        totalRows: wx.rows?.length || 0
+        firstRow: rows[0] || null,
+        lastRow: rows[rows.length - 1] || null,
+        totalRows: rows.length
       },
 
       modelOutput: result
