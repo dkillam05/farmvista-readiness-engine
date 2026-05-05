@@ -1,6 +1,6 @@
 // ================================
 // FILE: config/firestore.js
-// PURPOSE: FIRESTORE INIT
+// PURPOSE: Firestore init
 // ================================
 
 const admin = require("firebase-admin");
