@@ -1,13 +1,13 @@
 // ================================
 // FILE: services/run.js
-// PURPOSE: FULL BATCH FLOW
+// PURPOSE: Main batch flow
 // ================================
 
 const { loadFields } = require("./fields");
 const { ensureWeatherCacheForField } = require("./weather-cache");
 const { runFieldReadinessCoreServer } = require("./readiness");
 
-async function runBatch(req) {
+async function runBatch() {
   const fields = await loadFields();
 
   let ok = 0;
@@ -31,7 +31,12 @@ async function runBatch(req) {
     }
   }
 
-  return { ok: true, total: fields.length, okCount: ok, fail };
+  return {
+    ok: true,
+    total: fields.length,
+    okCount: ok,
+    fail
+  };
 }
 
 module.exports = { runBatch };
