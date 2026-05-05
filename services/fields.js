@@ -1,6 +1,6 @@
 // ================================
 // FILE: services/fields.js
-// PURPOSE: Load fields
+// PURPOSE: Load fields (fixed for location object)
 // ================================
 
 const { db } = require("../config/firestore");
@@ -11,12 +11,16 @@ async function loadFields() {
 
   snap.forEach(doc => {
     const d = doc.data();
-    if (!d?.lat || !d?.lng) return;
+
+    const lat = d?.lat ?? d?.location?.lat;
+    const lng = d?.lng ?? d?.location?.lng;
+
+    if (!lat || !lng) return;
 
     out.push({
       id: doc.id,
-      lat: d.lat,
-      lng: d.lng
+      lat,
+      lng
     });
   });
 
