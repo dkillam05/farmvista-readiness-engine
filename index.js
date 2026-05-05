@@ -2355,9 +2355,16 @@ async function writeReadinessForFields(fields, runKey, timezone, cacheOpts) {
 
 const { buildWeatherRows } = require("./js/weather-row-builder");
 
+const mrmsSnap = await db
+  .collection("field_mrms_weather")
+  .doc(String(f.id))
+  .get();
+
+const mrmsDoc = mrmsSnap.exists ? mrmsSnap.data() : null;
+
 let weatherRows = buildWeatherRows(
   wx,
-  mrmsMap.get(String(f.id)) || null,
+  mrmsDoc,
   timezone
 );
 
