@@ -1,4 +1,5 @@
 // FILE: /core/readiness-engine.js
+// FULL REBUILD: same physics, FIXED readiness scoring (no hard zero collapse)
 
 function clamp(n, lo, hi) {
   const v = Number(n);
@@ -25,6 +26,9 @@ function pickNumber(...vals) {
   return 0;
 }
 
+/* =========================================================================
+DRY POWER (UNCHANGED)
+========================================================================= */
 function calcDryPower(row) {
   const temp = pickNumber(row.tempF, row.tempAvg);
   const wind = pickNumber(row.windMph, row.windAvg);
@@ -45,6 +49,9 @@ function calcDryPower(row) {
   return clamp(dry, 0, 1);
 }
 
+/* =========================================================================
+RAIN EFFECTIVENESS (UNCHANGED)
+========================================================================= */
 function effectiveRain(rain, storage, Smax) {
   if (!rain || rain <= 0) return 0;
 
@@ -54,12 +61,18 @@ function effectiveRain(rain, storage, Smax) {
   return rain * (1 - runoff);
 }
 
+/* =========================================================================
+SURFACE WATER (UNCHANGED)
+========================================================================= */
 function surfaceUpdate(surface, rain, dry, stepFactor) {
   surface += rain * 2.8;
   surface -= (0.015 + dry * 0.18) * stepFactor;
   return clamp(surface, 0, 1.2);
 }
 
+/* =========================================================================
+SOIL STORAGE (UNCHANGED)
+========================================================================= */
 function storageUpdate(storage, rainEff, dry, Smax, stepFactor) {
   storage += rainEff;
   const loss = (0.02 + dry * 0.15) * stepFactor;
@@ -67,20 +80,26 @@ function storageUpdate(storage, rainEff, dry, Smax, stepFactor) {
   return clamp(storage, 0, Smax);
 }
 
+/* =========================================================================
+🔥 FIXED READINESS LOGIC (THIS IS THE ONLY CHANGE)
+========================================================================= */
 function calcReadiness(storage, surface, Smax) {
   const storageFrac = clamp(storage / Smax, 0, 1);
-
-  let readiness = 100 * (1 - storageFrac);
-  readiness *= (1 - Math.pow(storageFrac, 1.3));
-
   const surfaceFrac = clamp(surface / 1.2, 0, 1);
-  const surfacePenalty = surfaceFrac * 50;
 
-  readiness -= surfacePenalty;
+  // 🔥 COMBINED WETNESS (balanced like real-world conditions)
+  const wetness =
+    (storageFrac * 0.6) +   // soil importance
+    (surfaceFrac * 0.4);    // surface importance
+
+  let readiness = 100 * (1 - wetness);
 
   return clamp(readiness, 0, 100);
 }
 
+/* =========================================================================
+MAIN ENGINE
+========================================================================= */
 function runReadinessEngine({
   weatherRows,
   soilWetness = 60,
@@ -91,7 +110,7 @@ function runReadinessEngine({
     return null;
   }
 
-  // 🔥 CRITICAL FIX
+  // 🔥 ENSURE TIME ORDER
   weatherRows.sort((a, b) => new Date(a.dateISO) - new Date(b.dateISO));
 
   const Smax = clamp(
