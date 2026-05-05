@@ -2355,18 +2355,52 @@ async function writeReadinessForFields(fields, runKey, timezone, cacheOpts) {
 
 const { buildWeatherRows } = require("./js/weather-row-builder");
 
-const mrmsSnap = await db
-  .collection("field_mrms_weather")
-  .doc(String(f.id))
-  .get();
+// ================================
+// LOAD MRMS (MATCH FRONTEND)
+// ================================
+let mrmsDoc = null;
 
-const mrmsDoc = mrmsSnap.exists ? mrmsSnap.data() : null;
+try {
+  const mrmsSnap = await db
+    .collection("field_mrms_weather")
+    .doc(String(f.id))
+    .get();
 
+  if (mrmsSnap.exists) {
+    mrmsDoc = mrmsSnap.data();
+
+    // 🔍 DEBUG (leave this in for now)
+    console.log("[MRMS] Loaded for field:", f.id, {
+      hasSeries: Array.isArray(mrmsDoc?.mrmsDailySeries30d),
+      days: mrmsDoc?.mrmsDailySeries30d?.length || 0
+    });
+  } else {
+    console.warn("[MRMS] Missing doc for field:", f.id);
+  }
+} catch (err) {
+  console.error("[MRMS] Load failed for field:", f.id, err);
+}
+
+// ================================
+// BUILD WEATHER ROWS (MRMS APPLIED)
+// ================================
 let weatherRows = buildWeatherRows(
   wx,
   mrmsDoc,
   timezone
 );
+
+// 🔍 DEBUG VERIFY (VERY IMPORTANT)
+if (weatherRows?.length) {
+  const sample = weatherRows[weatherRows.length - 1];
+  console.log("[WEATHER ROW CHECK]", {
+    fieldId: f.id,
+    date: sample?.dateISO,
+    rainIn: sample?.rainIn,
+    rainAdj: sample?.rainInAdj,
+    source: sample?.rainSource
+  });
+}
 
       if (!weatherRows.length) {
         const normalized = wx.normalized || null;
