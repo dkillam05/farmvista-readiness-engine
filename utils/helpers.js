@@ -1,15 +1,17 @@
 // ================================
 // FILE: utils/helpers.js
-// PURPOSE: Shared helper functions
+// PURPOSE: BASIC HELPERS
 // ================================
 
-function clamp(n, lo, hi) {
-  return Math.max(lo, Math.min(hi, Number(n)));
-}
+// ⛔ COPY:
+// clamp
+// round
+// num
+// safeNum
+// isoDate
+// etc
 
-function round(v, d = 2) {
-  const p = Math.pow(10, d);
-  return Math.round(Number(v) * p) / p;
-}
-
-module.exports = { clamp, round };
+module.exports = {
+  clamp,
+  round
+};
