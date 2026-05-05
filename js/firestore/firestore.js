@@ -1,10 +1,9 @@
 // ============================================
 // FILE: firestore.js
-// PURPOSE: Initialize and export Firestore
 // ============================================
 
-let admin = null;
-let db = null;
+let admin;
+let db;
 
 function getFirestore() {
   if (db) return db;
@@ -19,6 +18,4 @@ function getFirestore() {
   return db;
 }
 
-module.exports = {
-  getFirestore
-};
+module.exports = { getFirestore };
