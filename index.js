@@ -726,36 +726,32 @@ function normalizeHourlyExt(data) {
 }
 
 function pickPreferredSoilTemp(row) {
-  const vals = [
-    { value: safeNum(row?.soil_temp_c_0_10), source: "0_10" },
-    { value: safeNum(row?.soil_temp_c_10_40), source: "10_40" },
-    { value: safeNum(row?.soil_temp_c_40_100), source: "40_100" },
-    { value: safeNum(row?.soil_temp_c_100_200), source: "100_200" }
-  ];
+  const t0 = safeNum(row?.soil_temp_c_0_10);
+  const t1 = safeNum(row?.soil_temp_c_10_40);
+  const t2 = safeNum(row?.soil_temp_c_40_100);
+  const t3 = safeNum(row?.soil_temp_c_100_200);
 
-  for (const v of vals) {
-    if (Number.isFinite(v.value) && Math.abs(v.value) > 0.25) {
-      return v;
-    }
+  if (Number.isFinite(t0) && !(t0 === 0 && Number.isFinite(t1) && Math.abs(t1) > 0.25)) {
+    return { value: t0, source: "0_10" };
   }
-
+  if (Number.isFinite(t1)) return { value: t1, source: "10_40" };
+  if (Number.isFinite(t2)) return { value: t2, source: "40_100" };
+  if (Number.isFinite(t3)) return { value: t3, source: "100_200" };
   return { value: null, source: null };
 }
 
 function pickPreferredSoilMoisture(row) {
-  const vals = [
-    { value: safeNum(row?.soil_moisture_0_10), source: "0_10" },
-    { value: safeNum(row?.soil_moisture_10_40), source: "10_40" },
-    { value: safeNum(row?.soil_moisture_40_100), source: "40_100" },
-    { value: safeNum(row?.soil_moisture_100_200), source: "100_200" }
-  ];
+  const m0 = safeNum(row?.soil_moisture_0_10);
+  const m1 = safeNum(row?.soil_moisture_10_40);
+  const m2 = safeNum(row?.soil_moisture_40_100);
+  const m3 = safeNum(row?.soil_moisture_100_200);
 
-  for (const v of vals) {
-    if (Number.isFinite(v.value) && v.value > 0.001) {
-      return v;
-    }
+  if (Number.isFinite(m0) && !(m0 === 0 && Number.isFinite(m1) && m1 > 0.001)) {
+    return { value: m0, source: "0_10" };
   }
-
+  if (Number.isFinite(m1)) return { value: m1, source: "10_40" };
+  if (Number.isFinite(m2)) return { value: m2, source: "40_100" };
+  if (Number.isFinite(m3)) return { value: m3, source: "100_200" };
   return { value: null, source: null };
 }
 
@@ -860,25 +856,15 @@ function aggregateHourlyToDailySplit(
     return row;
   }
 
-function includeHour(timeStr) {
-  if (!timeStr || typeof timeStr !== "string" || timeStr.length < 10) return false;
+  function includeHour(timeStr) {
+    if (!timeStr || typeof timeStr !== "string" || timeStr.length < 10) return false;
+    const dateISO = timeStr.slice(0, 10);
+    if (dateISO !== tISO) return true;
 
-  const dateISO = timeStr.slice(0, 10);
-
-  // Past days → keep all
-  if (dateISO < tISO) return true;
-
-  // Future days → keep all
-  if (dateISO > tISO) return true;
-
-  // ✅ TODAY → allow slight forward look (3–4 hours max)
-  const ms = timeToMsLocal(timeStr);
-  if (!Number.isFinite(ms)) return true;
-
-  const hoursAhead = (ms - nowMs) / (1000 * 60 * 60);
-
-  return hoursAhead <= 4; // 👈 key line
-}
+    const ms = timeToMsLocal(timeStr);
+    if (!Number.isFinite(ms)) return true;
+    return ms <= nowMs;
+  }
 
   for (const h of hourlyCore || []) {
     const t = String(h.time || "");
@@ -2051,11 +2037,7 @@ function pickSeed(rows, f) {
   };
 }
 
-async function runFieldReadinessCoreServer(weatherRows, soilWetness, drainageIndex, existingLatestDoc = null) {
-
-  // ✅ ADD THIS LINE (right here, immediately inside function)
-  existingLatestDoc = existingLatestDoc || null;
-
+async function runFieldReadinessCoreServer(weatherRows, soilWetness, drainageIndex) {
   if (!Array.isArray(weatherRows) || !weatherRows.length) return null;
 
   const rowsNorm = normalizeWeatherRowsForModel(weatherRows);
@@ -2066,21 +2048,9 @@ async function runFieldReadinessCoreServer(weatherRows, soilWetness, drainageInd
   const tune = getTune();
   const rate = getRateMults();
 
-  // ✅ NEW SEED LOGIC (ONLY CHANGE)
-  let seedStorageRaw;
-  let seedSource;
-  let startIdx = 0;
+  const seedPick = pickSeed(rowsNorm, f);
 
-  if (existingLatestDoc && Number.isFinite(Number(existingLatestDoc.storageFinal))) {
-    // ✅ EXISTING FIELD → use stored state
-    seedStorageRaw = clamp(Number(existingLatestDoc.storageFinal), 0, f.Smax);
-    seedSource = "latest";
-  } else {
-    // ✅ NEW FIELD → simple consistent baseline (no rewind)
-    seedStorageRaw = clamp(0.10 * f.Smax, 0, f.Smax);
-    seedSource = "baseline";
-  }
-
+  const seedStorageRaw = clamp(seedPick.seedStorage, 0, f.Smax);
   const globalStorageMult = await loadGlobalStorageMult();
   const seedStorageAdjusted = seedStorageRaw;
 
@@ -2089,8 +2059,159 @@ async function runFieldReadinessCoreServer(weatherRows, soilWetness, drainageInd
 
   const trace = [];
 
-  // rest unchanged...
+  for (let i = seedPick.startIdx; i < rowsNorm.length; i++) {
+    const d = rowsNorm[i];
+    const rain = Number(d.rainInAdj || 0);
+    const before = storage;
+    const surfaceBefore = surfaceStorage;
+
+    let rainEff = effectiveRainInches(rain, before, f.Smax, f, tune);
+    rainEff = clamp(rainEff * rate.rainEffMult, 0, 1000);
+
+    const addSm = EXTRA.ADD_SM010_W * d.smN_day * 0.05;
+
+    let rainForStorage = rainEff;
+
+    if (rainForStorage <= 0.15) {
+      rainForStorage *= 0.25;
+    } else if (rainForStorage <= 0.30) {
+      rainForStorage *= 0.60;
+    }
+
+    const addRain = rainForStorage * f.infilMult;
+    const add = addRain + addSm;
+
+    let lossBase =
+      Number(d.dryPwr || 0) *
+      LOSS_SCALE *
+      f.dryMult *
+      (1 + EXTRA.LOSS_ET0_W * d.et0N);
+
+    const rainTimingDryFactorVal = clamp(
+      Number(d.rainTimingDryFactor ?? sameDayRainDryFactor(d, tune)),
+      tune.SAME_DAY_LATE_RAIN_DRY_FLOOR,
+      1
+    );
+    lossBase *= rainTimingDryFactorVal;
+
+    const stateDryMult = storageDrydownMult(before, f.Smax, tune);
+    const surfaceWetDryMult = surfaceWetHoldDryMult(surfaceBefore, tune);
+
+    let loss = lossBase * stateDryMult * surfaceWetDryMult;
+    loss = Math.max(0, loss * rate.dryLossMult);
+
+    if (f.Smax > 0 && Number.isFinite(before)) {
+      const sat = clamp(before / f.Smax, 0, 1);
+      if (sat < tune.DRY_TAIL_START) {
+        const frac = clamp(sat / Math.max(1e-6, tune.DRY_TAIL_START), 0, 1);
+        const mult = tune.DRY_TAIL_MIN_MULT + (1 - tune.DRY_TAIL_MIN_MULT) * frac;
+        loss = loss * mult;
+      }
+    }
+
+    let after = clamp(before + add - loss, 0, f.Smax);
+
+    const surfaceAdd = surfaceStorageAddFromRain(rain, tune);
+    const surfaceDryBase = surfaceDrydownInchesPerDay(d, d.et0N, tune);
+    const surfaceDry = surfaceDryBase * rainTimingDryFactorVal;
+
+    surfaceStorage = clamp(surfaceBefore + surfaceAdd - surfaceDry, 0, tune.SURFACE_CAP_IN);
+
+    const handoffFrac = surfaceToStorageFrac(d, tune);
+    const storageRoom = Math.max(0, f.Smax - after);
+    const surfaceToStorage = Math.min(surfaceStorage * handoffFrac, storageRoom);
+
+    after = clamp(after + surfaceToStorage, 0, f.Smax);
+    surfaceStorage = clamp(surfaceStorage - surfaceToStorage, 0, tune.SURFACE_CAP_IN);
+
+    const storageFloor = surfaceDrivenStorageFloor(surfaceStorage, f.Smax, tune);
+    after = Math.max(after, storageFloor);
+
+    storage = clamp(after, 0, f.Smax);
+
+    const infilMultEff = rain > 0 ? clamp(addRain / Math.max(1e-6, rain), 0, 5) : 0;
+
+    trace.push({
+      dateISO: d.dateISO,
+      before,
+      after: storage,
+      rain,
+      rainSource: String(d.rainSource || "unknown"),
+
+      rainMorningIn: Number(d.rainMorningIn || 0),
+      rainMiddayIn: Number(d.rainMiddayIn || 0),
+      rainEveningIn: Number(d.rainEveningIn || 0),
+      rainTimingDryFactor: round(rainTimingDryFactorVal, 3),
+
+      rainEff,
+      rainForStorage,
+      infilMult: infilMultEff,
+      addRain,
+      addSm,
+      add,
+
+      lossBase,
+      stateDryMult,
+      surfaceWetDryMult,
+      loss,
+
+      dryPwr: d.dryPwr,
+
+      surfaceBefore,
+      surfaceAdd,
+      surfaceDry,
+      surfaceToStorage,
+      surfaceAfter: surfaceStorage,
+      surfacePenalty: surfacePenaltyFromStorage(surfaceStorage, tune),
+
+      storageFloor
+    });
+  }
+
+  const storagePhysFinal = storage;
+  const calRes = applyCalToStorage(storagePhysFinal, f.Smax);
+  const storageEff = calRes.storageEff;
+
+  const creditIn = signedCreditInchesFromSmax(f.Smax);
+  const storageForReadiness = clamp((storageEff * globalStorageMult) - creditIn, 0, f.Smax);
+
+  const baseWetness = f.Smax > 0 ? clamp((storageForReadiness / f.Smax) * 100, 0, 100) : 0;
+  const baseReadiness = clamp(100 - baseWetness, 0, 100);
+  const surfacePenalty = surfacePenaltyFromStorage(surfaceStorage, tune);
+
+  const readinessRaw = baseReadiness - surfacePenalty;
+  const readiness = clamp(readinessRaw, 0, 100);
+  const wetness = clamp(100 - readiness, 0, 100);
+
+  const last7 = trace.slice(-7);
+  const avgLossDay = last7.length ? last7.reduce((s, x) => s + x.loss, 0) / last7.length : 0.08;
+
+  return {
+    rows: rowsNorm,
+    trace,
+    factors: f,
+    storagePhysFinal,
+    storageFinal: calRes.storageEff,
+    wetness,
+    readiness,
+    wetnessR: Math.round(wetness),
+    readinessR: Math.round(readiness),
+    baseReadiness,
+    baseReadinessR: Math.round(baseReadiness),
+    surfacePenalty,
+    surfacePenaltyR: Math.round(surfacePenalty),
+    surfaceStorageFinal: surfaceStorage,
+    readinessCreditIn: creditIn,
+    storageForReadiness,
+    avgLossDay,
+    seedSource: seedPick.source,
+    rewindDays: DEFAULT_REWIND_DAYS,
+    globalStorageMultApplied: globalStorageMult,
+    seedStorageRaw,
+    seedStorageAdjusted
+  };
 }
+
 /* =========================================================================
 Weather cache + readiness writers
 ========================================================================= */
@@ -2149,7 +2270,12 @@ async function writeReadinessForFields(fields, runKey, timezone, cacheOpts) {
           autoWeatherBuilt++;
           wxSnap = await db.collection(WEATHER_CACHE_COLLECTION).doc(f.id).get();
         } catch (e) {
-          console.warn("[Readiness] auto weather build failed:", f.id, f.name, e?.message || e);
+          console.warn(
+            "[Readiness] auto weather build failed:",
+            f.id,
+            f.name,
+            e?.message || e
+          );
         }
       }
 
@@ -2160,10 +2286,7 @@ async function writeReadinessForFields(fields, runKey, timezone, cacheOpts) {
 
       const wx = wxSnap.data() || {};
 
-      let weatherRows = buildModelWeatherRowsForServer(
-        wx,
-        mrmsMap.get(String(f.id)) || null
-      );
+      let weatherRows = buildModelWeatherRowsForServer(wx, mrmsMap.get(String(f.id)) || null);
 
       if (!weatherRows.length) {
         const normalized = wx.normalized || null;
@@ -2193,6 +2316,13 @@ async function writeReadinessForFields(fields, runKey, timezone, cacheOpts) {
         continue;
       }
 
+      weatherRows = weatherRows;
+
+      if (!weatherRows.length) {
+        fail++;
+        continue;
+      }
+
       const fieldDoc = await db.collection("fields").doc(f.id).get();
       const fd = fieldDoc.exists ? fieldDoc.data() || {} : {};
       const extractedParams = extractFieldParamsLikeFrontend(fd);
@@ -2205,25 +2335,23 @@ async function writeReadinessForFields(fields, runKey, timezone, cacheOpts) {
         ? Number(extractedParams.drainageIndex)
         : DEFAULT_DRAIN;
 
-      // ✅ FIX: MOVE THIS UP BEFORE CALL
-      const latestSnap = await db
-        .collection(READINESS_LATEST_COLLECTION)
-        .doc(f.id)
-        .get();
-
-      const latestDoc = latestSnap.exists ? (latestSnap.data() || {}) : null;
-
       const snapshot = await runFieldReadinessCoreServer(
         weatherRows,
         soilWetness,
-        drainageIndex,
-        latestDoc
+        drainageIndex
       );
 
       if (!snapshot || !Number.isFinite(Number(snapshot.readinessR))) {
         fail++;
         continue;
       }
+
+      const latestSnap = await db
+        .collection(READINESS_LATEST_COLLECTION)
+        .doc(f.id)
+        .get();
+
+      const latestDoc = latestSnap.exists ? (latestSnap.data() || {}) : null;
 
       const lastRow = Array.isArray(snapshot.rows) && snapshot.rows.length
         ? snapshot.rows[snapshot.rows.length - 1]
@@ -2246,17 +2374,72 @@ async function writeReadinessForFields(fields, runKey, timezone, cacheOpts) {
       }
 
       const outRef = db.collection(READINESS_LATEST_COLLECTION).doc(f.id);
+      const stateRows = Array.isArray(snapshot.rows) ? snapshot.rows : [];
+      const lastStateRow = stateRows.length ? stateRows[stateRows.length - 1] : null;
+      const asOfDateISO =
+        safeISO10(
+          (lastStateRow && lastStateRow.dateISO) ||
+            (weatherRows.length ? weatherRows[weatherRows.length - 1].dateISO : "") ||
+            todayISOInTimeZone(timezone)
+        ) || todayISOInTimeZone(timezone);
+
+      const latestDailySeries = Array.isArray(wx.dailySeries) ? wx.dailySeries : [];
+      const latestDailySeriesFcst = Array.isArray(wx.dailySeriesFcst) ? wx.dailySeriesFcst : [];
+      const latestDailySeriesMeta = isPlainObject(wx.dailySeriesMeta) ? wx.dailySeriesMeta : {};
+      const latestTrace = Array.isArray(snapshot.trace) ? snapshot.trace : [];
+      const latestRows = Array.isArray(snapshot.rows) ? snapshot.rows : [];
 
       batch.set(
         outRef,
         {
           fieldId: f.id,
+          fieldName: f.name || wx.fieldName || null,
+          farmId: fd.farmId || f.farmId || null,
+          farmName: fd.farmName || f.farmName || null,
+          county: fd.county || f.county || null,
+          state: fd.state || f.state || null,
+          location: { lat: f.lat, lng: f.lng },
+
           readiness: Number(snapshot.readinessR),
           wetness: Number(snapshot.wetnessR),
+          baseReadiness: Number(
+            snapshot.baseReadinessR ?? snapshot.baseReadiness ?? snapshot.readinessR
+          ),
+          surfacePenalty: Number(snapshot.surfacePenaltyR ?? snapshot.surfacePenalty ?? 0),
+
           storageFinal: round(snapshot.storageFinal ?? 0, 4),
-          seedSource: String(snapshot.seedSource || "baseline"),
+          storagePhysFinal: round(snapshot.storagePhysFinal ?? snapshot.storageFinal ?? 0, 4),
+          storageForReadiness: round(snapshot.storageForReadiness ?? 0, 4),
+          surfaceStorageFinal: round(snapshot.surfaceStorageFinal ?? 0, 4),
+          readinessCreditIn: round(snapshot.readinessCreditIn ?? 0, 4),
+          avgLossDay: round(snapshot.avgLossDay ?? 0, 4),
+
+          soilWetness,
+          drainageIndex,
+          seedSource: String(snapshot.seedSource || "rewind"),
+          rewindDays: Number(snapshot.rewindDays ?? DEFAULT_REWIND_DAYS),
+          asOfDateISO,
+
+          globalStorageMultApplied: round(snapshot.globalStorageMultApplied ?? 1.0, 6),
+          seedStorageRaw: round(snapshot.seedStorageRaw ?? 0, 6),
+          seedStorageAdjusted: round(snapshot.seedStorageAdjusted ?? 0, 6),
+
+          // FIX: keep latest doc weather rows current for details weather table
+          dailySeries30d: latestDailySeries,
+          dailySeriesFcst: latestDailySeriesFcst,
+          dailySeriesMeta: latestDailySeriesMeta,
+          forecastRows: latestDailySeriesFcst,
+          weatherSource: safeStr(wx.source || ""),
+          weatherFetchedAt: wx.fetchedAt || null,
+          computedAt: _admin.firestore.FieldValue.serverTimestamp(),
+
+          // FIX: keep latest doc trace/model rows current for details fallbacks
+          rows: latestRows,
+          trace: latestTrace,
+
           updatedAt: _admin.firestore.FieldValue.serverTimestamp(),
-          runKey: String(runKey || "")
+          runKey: String(runKey || ""),
+          timezone: String(timezone || "America/Chicago")
         },
         { merge: true }
       );
