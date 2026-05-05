@@ -4,7 +4,8 @@
 // ================================
 
 const fetch = require("node-fetch");
-const { db, admin } = require("../config/firestore");
+const db = require("../config/firestore");        // ✅ FIXED
+const admin = require("firebase-admin");          // ✅ FIXED
 
 /* ================================
 FETCH WEATHER
