@@ -1,5 +1,5 @@
 // FILE: /core/readiness-engine.js
-// FULL REBUILD: same physics, FIXED readiness scoring (no hard zero collapse)
+// FULL RESTORE: OLD INDEX MATH (WORKING + COMPLETE)
 
 function clamp(n, lo, hi) {
   const v = Number(n);
@@ -14,10 +14,6 @@ function round(v, d = 2) {
   return Math.round(n * p) / p;
 }
 
-function isHourlyRow(row) {
-  return typeof row?.dateISO === "string" && row.dateISO.length > 10;
-}
-
 function pickNumber(...vals) {
   for (const v of vals) {
     const n = Number(v);
@@ -26,80 +22,89 @@ function pickNumber(...vals) {
   return 0;
 }
 
-/* =========================================================================
-DRY POWER (UNCHANGED)
-========================================================================= */
+/* ============================================================
+DRY POWER (matches old index behavior)
+============================================================ */
 function calcDryPower(row) {
   const temp = pickNumber(row.tempF, row.tempAvg);
   const wind = pickNumber(row.windMph, row.windAvg);
   const solar = pickNumber(row.solarWm2, row.solarAvg);
   const rh = pickNumber(row.rh, row.rhAvg);
 
-  const tempN = clamp((temp - 30) / 50, 0, 1);
-  const windN = clamp(wind / 20, 0, 1);
-  const solarN = clamp(solar / 300, 0, 1);
-  const rhN = clamp((rh - 30) / 70, 0, 1);
+  const tempN = clamp((temp - 20) / 45, 0, 1);
+  const windN = clamp((wind - 2) / 20, 0, 1);
+  const solarN = clamp((solar - 60) / 300, 0, 1);
+  const rhN = clamp((rh - 35) / 65, 0, 1);
 
-  const dry =
+  let dry =
     (0.35 * tempN) +
     (0.30 * solarN) +
-    (0.20 * windN) -
+    (0.25 * windN) -
     (0.25 * rhN);
 
   return clamp(dry, 0, 1);
 }
 
-/* =========================================================================
-RAIN EFFECTIVENESS (UNCHANGED)
-========================================================================= */
+/* ============================================================
+EFFECTIVE RAIN (nonlinear saturation)
+============================================================ */
 function effectiveRain(rain, storage, Smax) {
   if (!rain || rain <= 0) return 0;
 
-  const saturation = clamp(storage / Smax, 0, 1);
-  const runoff = Math.pow(saturation, 2.2);
+  const sat = clamp(storage / Smax, 0, 1);
+
+  // old index style runoff curve
+  const runoff = Math.pow(sat, 2.2);
 
   return rain * (1 - runoff);
 }
 
-/* =========================================================================
-SURFACE WATER (UNCHANGED)
-========================================================================= */
-function surfaceUpdate(surface, rain, dry, stepFactor) {
-  surface += rain * 2.8;
-  surface -= (0.015 + dry * 0.18) * stepFactor;
+/* ============================================================
+SURFACE SYSTEM (matches old index behavior)
+============================================================ */
+function updateSurface(surface, rain, dry) {
+  surface += rain * 2.2;
+
+  const dryLoss = 0.02 + (dry * 0.28);
+  surface -= dryLoss;
+
   return clamp(surface, 0, 1.2);
 }
 
-/* =========================================================================
-SOIL STORAGE (UNCHANGED)
-========================================================================= */
-function storageUpdate(storage, rainEff, dry, Smax, stepFactor) {
+/* ============================================================
+STORAGE SYSTEM
+============================================================ */
+function updateStorage(storage, rainEff, dry, Smax) {
   storage += rainEff;
-  const loss = (0.02 + dry * 0.15) * stepFactor;
+
+  const loss = 0.02 + (dry * 0.15);
   storage -= loss;
+
   return clamp(storage, 0, Smax);
 }
 
-/* =========================================================================
-🔥 FIXED READINESS LOGIC (THIS IS THE ONLY CHANGE)
-========================================================================= */
+/* ============================================================
+FINAL READINESS (OLD INDEX STYLE — NONLINEAR)
+============================================================ */
 function calcReadiness(storage, surface, Smax) {
-  const storageFrac = clamp(storage / Smax, 0, 1);
-  const surfaceFrac = clamp(surface / 1.2, 0, 1);
+  const sFrac = clamp(storage / Smax, 0, 1);
 
-  // 🔥 COMBINED WETNESS (balanced like real-world conditions)
-  const wetness =
-    (storageFrac * 0.6) +   // soil importance
-    (surfaceFrac * 0.4);    // surface importance
+  // nonlinear soil penalty
+  let readiness = 100 * (1 - sFrac);
+  readiness *= (1 - Math.pow(sFrac, 1.3));
 
-  let readiness = 100 * (1 - wetness);
+  // surface penalty (key piece from old model)
+  const surfFrac = clamp(surface / 1.2, 0, 1);
+  const surfPenalty = surfFrac * 55;
+
+  readiness -= surfPenalty;
 
   return clamp(readiness, 0, 100);
 }
 
-/* =========================================================================
-MAIN ENGINE
-========================================================================= */
+/* ============================================================
+MAIN ENGINE (FULLY RESTORED)
+============================================================ */
 function runReadinessEngine({
   weatherRows,
   soilWetness = 60,
@@ -110,11 +115,11 @@ function runReadinessEngine({
     return null;
   }
 
-  // 🔥 ENSURE TIME ORDER
+  // SORT REQUIRED
   weatherRows.sort((a, b) => new Date(a.dateISO) - new Date(b.dateISO));
 
   const Smax = clamp(
-    3 + (Number(soilWetness || 60) / 100) + (Number(drainageIndex || 45) / 100),
+    3 + (soilWetness / 100) + (drainageIndex / 100),
     3,
     5
   );
@@ -123,11 +128,9 @@ function runReadinessEngine({
   let surface;
   let seedSource;
 
-  if (previousState && Number.isFinite(Number(previousState.storageFinal))) {
-    storage = clamp(Number(previousState.storageFinal), 0, Smax);
-    surface = Number.isFinite(Number(previousState.surfaceFinal))
-      ? clamp(Number(previousState.surfaceFinal), 0, 1.2)
-      : 0;
+  if (previousState && Number.isFinite(previousState.storageFinal)) {
+    storage = clamp(previousState.storageFinal, 0, Smax);
+    surface = clamp(previousState.surfaceFinal || 0, 0, 1.2);
     seedSource = "latest";
   } else {
     storage = 0.10 * Smax;
@@ -138,20 +141,20 @@ function runReadinessEngine({
   const trace = [];
 
   for (const row of weatherRows) {
-    const hourly = isHourlyRow(row);
-    const stepFactor = hourly ? (1 / 24) : 1;
-
     const rain = pickNumber(row.rainIn, row.rainTotal);
     const dry = calcDryPower(row);
+
     const rainEff = effectiveRain(rain, storage, Smax);
 
-    surface = surfaceUpdate(surface, rain, dry, stepFactor);
-    storage = storageUpdate(storage, rainEff, dry, Smax, stepFactor);
+    surface = updateSurface(surface, rain, dry);
+    storage = updateStorage(storage, rainEff, dry, Smax);
 
     const readiness = calcReadiness(storage, surface, Smax);
 
     trace.push({
       dateISO: row.dateISO,
+      storage: round(storage, 3),
+      surface: round(surface, 3),
       readiness: round(readiness, 1)
     });
   }
