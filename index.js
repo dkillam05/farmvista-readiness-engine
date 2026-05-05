@@ -2482,8 +2482,8 @@ if (!weatherRows.length) {
             todayISOInTimeZone(timezone)
         ) || todayISOInTimeZone(timezone);
 
-      const latestDailySeries = Array.isArray(wx.dailySeries) ? wx.dailySeries : [];
-      const latestDailySeriesFcst = Array.isArray(wx.dailySeriesFcst) ? wx.dailySeriesFcst : [];
+      const latestDailySeries = Array.isArray(weatherRows) ? weatherRows : [];
+      const latestDailySeriesFcst = [];      
       const latestDailySeriesMeta = isPlainObject(wx.dailySeriesMeta) ? wx.dailySeriesMeta : {};
       const latestTrace = Array.isArray(snapshot.trace) ? snapshot.trace : [];
       const latestRows = Array.isArray(snapshot.rows) ? snapshot.rows : [];
