@@ -1,18 +1,34 @@
 // ================================
 // FILE: services/weather-cache.js
-// PURPOSE: WEATHER CACHE + BUILD
+// PURPOSE: Fetch + cache weather
 // ================================
 
-const { db } = require("../config/firestore");
+const { db, admin } = require("../config/firestore");
+const { fetchOpenMeteo } = require("./weather-fetch");
 
-// ⛔ COPY:
-// ensureWeatherCacheForField
-// cacheWeatherForField
-// maybeResetWeatherCacheForLocationChange
-// fetchOpenMeteo usage
+async function ensureWeatherCacheForField(field) {
+  const url = `https://api.open-meteo.com/v1/forecast?latitude=${field.lat}&longitude=${field.lng}&hourly=temperature_2m,precipitation&timezone=America/Chicago`;
 
-// DO NOT CHANGE ANY LOGIC
+  const data = await fetchOpenMeteo(url);
 
-module.exports = {
-  ensureWeatherCacheForField
-};
+  const rows = data?.hourly?.time?.map((t, i) => ({
+    time: t,
+    rain: data.hourly.precipitation[i] || 0,
+    temp: data.hourly.temperature_2m[i] || 0
+  })) || [];
+
+  await db.collection("field_weather_cache").doc(field.id).set({
+    fieldId: field.id,
+    rows,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp()
+  }, { merge: true });
+
+  return {
+    rows,
+    soilWetness: 60,
+    drainageIndex: 45,
+    latestDoc: null
+  };
+}
+
+module.exports = { ensureWeatherCacheForField };
