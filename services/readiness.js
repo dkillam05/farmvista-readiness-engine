@@ -16,10 +16,12 @@ async function loadGlobalStorageMult() {
 // DRY POWER
 // ================================
 function calcDryParts(r) {
-  const temp = Number(r.tempF || 0);
-  const wind = Number(r.windMph || 0);
-  const rh = Number(r.rh || 0);
-  const solar = Number(r.solarWm2 || 0);
+  const tempC = Number(r.temp ?? 0);
+  const temp = tempC * 9/5 + 32;
+
+  const wind = Number(r.windMph || 3);   // default slight wind
+  const rh = Number(r.rh || 60);         // default humidity
+  const solar = Number(r.solarWm2 || 150); // default daylight
 
   const tempN = clamp((temp - 20) / 45, 0, 1);
   const windN = clamp((wind - 2) / 20, 0, 1);
