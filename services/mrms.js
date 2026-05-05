@@ -1,13 +1,10 @@
 // ================================
 // FILE: services/mrms.js
-// PURPOSE: MRMS RAINFALL LOGIC
+// PURPOSE: MRMS placeholder (no change)
 // ================================
 
-// ⛔ COPY ALL MRMS FUNCTIONS:
-// - mrmsBackfillReadyServer
-// - overlayMrmsRainOntoWeatherRows
-// - buildModelWeatherRowsForServer
+function applyMrms(rows) {
+  return rows;
+}
 
-module.exports = {
-  // exports
-};
+module.exports = { applyMrms };
