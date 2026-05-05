@@ -1,0 +1,37 @@
+// ================================
+// FILE: services/run.js
+// PURPOSE: FULL BATCH FLOW
+// ================================
+
+const { loadFields } = require("./fields");
+const { ensureWeatherCacheForField } = require("./weather-cache");
+const { runFieldReadinessCoreServer } = require("./readiness");
+
+async function runBatch(req) {
+  const fields = await loadFields();
+
+  let ok = 0;
+  let fail = 0;
+
+  for (const f of fields) {
+    try {
+      const wx = await ensureWeatherCacheForField(f);
+
+      const snapshot = await runFieldReadinessCoreServer(
+        wx.rows,
+        wx.soilWetness,
+        wx.drainageIndex,
+        wx.latestDoc
+      );
+
+      ok++;
+    } catch (e) {
+      console.log("fail", f.id, e.message);
+      fail++;
+    }
+  }
+
+  return { ok: true, total: fields.length, okCount: ok, fail };
+}
+
+module.exports = { runBatch };
