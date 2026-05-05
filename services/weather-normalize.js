@@ -1,16 +1,25 @@
 // ================================
 // FILE: services/weather-normalize.js
-// PURPOSE: ALL NORMALIZATION LOGIC
+// PURPOSE: Minimal normalization (kept simple)
 // ================================
 
-// ⛔ COPY YOUR normalizeHourlyCore
-// ⛔ COPY normalizeHourlyExt
-// ⛔ COPY normalizeDaily
-// ⛔ COPY aggregateHourlyToDailySplit
-// ⛔ COPY EVERYTHING EXACTLY FROM ORIGINAL FILE
+function normalizeHourly(data) {
+  const h = data?.hourly || {};
+  const time = h.time || [];
+  const rain = h.precipitation || [];
+  const temp = h.temperature_2m || [];
 
-// DO NOT MODIFY ANY MATH
+  const out = [];
 
-module.exports = {
-  // export all normalization functions
-};
+  for (let i = 0; i < time.length; i++) {
+    out.push({
+      time: time[i],
+      rain: rain[i] || 0,
+      temp: temp[i] || 0
+    });
+  }
+
+  return out;
+}
+
+module.exports = { normalizeHourly };
