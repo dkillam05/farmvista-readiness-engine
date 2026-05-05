@@ -2665,6 +2665,17 @@ app.get("/api/ensure-field", async (req, res) => {
   }
 });
 
+// ================================
+// ATTACH DEBUG ROUTES
+// ================================
+
+attachDebugRoutes(app, {
+  db: getFirestore(),
+  loadFieldById,
+  buildModelWeatherRowsForServer,
+  runFieldReadinessCoreServer
+});
+
 app.listen(PORT, () => {
   console.log(`farmvista-field-weather listening on ${PORT}`);
 });
