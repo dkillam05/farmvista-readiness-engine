@@ -2322,7 +2322,13 @@ async function writeReadinessForFields(fields, runKey, timezone, cacheOpts) {
 
       const wx = wxSnap.data() || {};
 
-      let weatherRows = buildModelWeatherRowsForServer(wx, mrmsMap.get(String(f.id)) || null);
+      const { buildWeatherRows } = require("./js/weather-row-builder");
+
+weatherRows = buildWeatherRows(
+  wx,
+  mrmsMap.get(String(f.id)) || null,
+  timezone
+);
 
       if (!weatherRows.length) {
         const normalized = wx.normalized || null;
