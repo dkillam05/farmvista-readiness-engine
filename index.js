@@ -2,6 +2,7 @@
 // FILE: index.js
 // PURPOSE:
 // Cloud Run runner + weather builder + readiness engine
+// + DAILY DEBUG TRACE WRITER
 // ============================================
 
 const express = require("express");
@@ -9,6 +10,7 @@ const admin = require("firebase-admin");
 
 const { runReadinessEngine } = require("./js/engine");
 const { buildWeatherCache } = require("./js/weather-builder");
+const { writeDailyDebug } = require("./js/daily-debug-writer");
 
 // --------------------------------------------
 // INIT FIREBASE
@@ -65,6 +67,14 @@ async function run() {
     }
 
     // --------------------------------------------
+    // REQUIRE MRMS FOR HISTORY
+    // --------------------------------------------
+    if (!mrmsDoc.exists) {
+      console.log("❌ Missing MRMS rainfall — skipping");
+      continue;
+    }
+
+    // --------------------------------------------
     // LOAD EXISTING STATE
     // --------------------------------------------
     const existingDocSnap = await db
@@ -103,7 +113,7 @@ async function run() {
     // --------------------------------------------
     const result = runReadinessEngine(
       wxDoc.data(),
-      mrmsDoc.exists ? mrmsDoc.data() : null,
+      mrmsDoc.data(),
       field,
       {
         seedMode,
@@ -130,7 +140,7 @@ async function run() {
     });
 
     // --------------------------------------------
-    // WRITE TO FIRESTORE
+    // WRITE MAIN SNAPSHOT
     // --------------------------------------------
     const outRef = db.collection(FIELD_CONDITIONS).doc(doc.id);
 
@@ -150,21 +160,37 @@ async function run() {
         readiness: Number(result.readiness),
         wetness: Number(result.wetness),
 
-        baseReadiness: Number(result.baseReadiness ?? result.readiness),
-        surfacePenalty: Number(result.surfacePenalty ?? 0),
+        baseReadiness: Number(
+          result.baseReadiness ?? result.readiness
+        ),
+
+        surfacePenalty: Number(
+          result.surfacePenalty ?? 0
+        ),
 
         soil: {
           storage: Number(result.storageFinal),
-          Smax: Number(result.factors?.Smax || 0)
+
+          Smax: Number(
+            result.factors?.Smax || 0
+          )
         },
 
         surface: {
-          water: Number(result.surfaceStorageFinal),
-          penalty: Number(result.surfacePenalty ?? 0)
+          water: Number(
+            result.surfaceStorageFinal
+          ),
+
+          penalty: Number(
+            result.surfacePenalty ?? 0
+          )
         },
 
-        asOfDateISO: new Date().toISOString().slice(0, 10),
-        computedAt: admin.firestore.FieldValue.serverTimestamp(),
+        asOfDateISO:
+          new Date().toISOString().slice(0, 10),
+
+        computedAt:
+          admin.firestore.FieldValue.serverTimestamp(),
 
         modelVersion: "2026-seed-system",
         source: "farmvista-engine",
@@ -175,9 +201,35 @@ async function run() {
       },
       { merge: true }
     );
+
+    // --------------------------------------------
+    // WRITE DAILY DEBUG TRACES
+    // --------------------------------------------
+    try {
+      await writeDailyDebug({
+        db,
+        field,
+        result,
+        wxDoc: wxDoc.data(),
+        mrmsDoc: mrmsDoc.data()
+      });
+
+      console.log(
+        "🧠 Daily debug traces written"
+      );
+    } catch (err) {
+      console.log(
+        "❌ Daily debug writer failed:",
+        err.message
+      );
+    }
   }
 
+  // --------------------------------------------
+  // COMMIT MAIN SNAPSHOTS
+  // --------------------------------------------
   await batch.commit();
+
   console.log("💾 Firestore write complete");
   console.log("\n✅ Run complete");
 
@@ -190,16 +242,24 @@ async function run() {
 
 // Health check
 app.get("/", (req, res) => {
-  res.send("FarmVista Readiness Engine Running");
+  res.send(
+    "FarmVista Readiness Engine Running"
+  );
 });
 
 // FULL SYSTEM RUN
 app.get("/run", async (req, res) => {
   try {
-    console.log("🌦️ STEP 1: Building weather cache...");
+    console.log(
+      "🌦️ STEP 1: Building weather cache..."
+    );
+
     await buildWeatherCache(db);
 
-    console.log("🚜 STEP 2: Running readiness engine...");
+    console.log(
+      "🚜 STEP 2: Running readiness engine..."
+    );
+
     const results = await run();
 
     res.json({
@@ -209,6 +269,7 @@ app.get("/run", async (req, res) => {
     });
   } catch (err) {
     console.error("🔥 Run error:", err);
+
     res.status(500).json({
       ok: false,
       error: err.message
@@ -222,5 +283,7 @@ app.get("/run", async (req, res) => {
 const PORT = process.env.PORT || 8080;
 
 app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
+  console.log(
+    `🚀 Server running on port ${PORT}`
+  );
 });
