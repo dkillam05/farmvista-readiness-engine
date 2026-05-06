@@ -1,14 +1,14 @@
 // ============================================
 // FILE: index.js
 // PURPOSE:
-// Cloud Run runner + readiness engine + Firestore write
-// WITH SEED LOGIC (rolling + baseline + location change)
+// Cloud Run runner + weather builder + readiness engine
 // ============================================
 
 const express = require("express");
 const admin = require("firebase-admin");
 
 const { runReadinessEngine } = require("./js/engine");
+const { buildWeatherCache } = require("./js/weather-builder");
 
 // --------------------------------------------
 // INIT FIREBASE
@@ -39,7 +39,7 @@ function isSameLocation(a, b, epsilon = 0.00001) {
 }
 
 // --------------------------------------------
-// MAIN RUN
+// MAIN READINESS RUN
 // --------------------------------------------
 async function run() {
   console.log("🚜 Starting readiness run...");
@@ -99,7 +99,7 @@ async function run() {
     console.log("🌱 Seed Mode:", seedMode);
 
     // --------------------------------------------
-    // RUN ENGINE (WITH SEED)
+    // RUN ENGINE
     // --------------------------------------------
     const result = runReadinessEngine(
       wxDoc.data(),
@@ -187,12 +187,19 @@ async function run() {
 // --------------------------------------------
 // ROUTES
 // --------------------------------------------
+
+// Health check
 app.get("/", (req, res) => {
   res.send("FarmVista Readiness Engine Running");
 });
 
+// FULL SYSTEM RUN
 app.get("/run", async (req, res) => {
   try {
+    console.log("🌦️ STEP 1: Building weather cache...");
+    await buildWeatherCache(db);
+
+    console.log("🚜 STEP 2: Running readiness engine...");
     const results = await run();
 
     res.json({
