@@ -2,7 +2,7 @@
 // FILE: /js/engine.js
 // PURPOSE:
 // Tie weather + MRMS + field settings into
-// one final readiness result
+// one final readiness result (WITH SEED LOGIC)
 // ============================================
 
 const { mergeWeather } = require("./weather-merge");
@@ -34,7 +34,28 @@ function runReadinessEngine(wxDoc, mrmsDoc, fieldDoc, opts = {}) {
     };
   }
 
-  const model = runSoilModel(dailyRows, fieldDoc);
+  // --------------------------------------------
+  // NEW: SEED HANDLING
+  // --------------------------------------------
+  const seed = {
+    mode: opts.seedMode || "baseline_30d",
+
+    // rolling values (if available)
+    storage: Number.isFinite(Number(opts.seedStorage))
+      ? Number(opts.seedStorage)
+      : null,
+
+    surface: Number.isFinite(Number(opts.seedSurface))
+      ? Number(opts.seedSurface)
+      : null
+  };
+
+  // --------------------------------------------
+  // RUN MODEL (WITH SEED)
+  // --------------------------------------------
+  const model = runSoilModel(dailyRows, fieldDoc, {
+    seed
+  });
 
   if (!model) {
     return {
@@ -43,6 +64,9 @@ function runReadinessEngine(wxDoc, mrmsDoc, fieldDoc, opts = {}) {
     };
   }
 
+  // --------------------------------------------
+  // READINESS
+  // --------------------------------------------
   const readiness = calculateReadiness(model, {
     globalStorageMult: opts.globalStorageMult ?? 1.0
   });
@@ -75,11 +99,19 @@ function runReadinessEngine(wxDoc, mrmsDoc, fieldDoc, opts = {}) {
     trace: model.trace,
     rows: dailyRows,
 
+    // --------------------------------------------
+    // DEBUG (IMPORTANT FOR YOU)
+    // --------------------------------------------
     debug: {
+      seedMode: seed.mode,
+      seedStorage: seed.storage,
+      seedSurface: seed.surface,
+
       globalStorageMultApplied: readiness.globalStorageMultApplied,
       Smax: readiness.Smax,
+
       source: "FarmVista modular readiness engine",
-      modelVersion: "2026-05-clean-start"
+      modelVersion: "2026-05-seed-enabled"
     }
   };
 }
