@@ -1,7 +1,7 @@
 // ============================================
 // FILE: /js/soil-model.js
 // PURPOSE:
-// FULL model loop (soil + surface integrated)
+// FULL model loop (WITH SEED SUPPORT)
 // ============================================
 
 const { calcDryingPower } = require("./drying-power");
@@ -32,14 +32,14 @@ function round(v, d = 2) {
 }
 
 // --------------------------------------------
-// CONSTANTS (same as old)
+// CONSTANTS
 // --------------------------------------------
 const LOSS_SCALE = 0.55;
 
 // --------------------------------------------
 // MAIN MODEL
 // --------------------------------------------
-function runSoilModel(weatherRows, field) {
+function runSoilModel(weatherRows, field, opts = {}) {
   if (!Array.isArray(weatherRows) || !weatherRows.length) {
     return null;
   }
@@ -50,22 +50,34 @@ function runSoilModel(weatherRows, field) {
   const last = weatherRows[weatherRows.length - 1];
   const factors = mapFactors(soilWetness, drainageIndex, last?.sm010);
 
-  let storage = clamp(0.1 * factors.Smax, 0, factors.Smax);
-  let surface = 0;
+  // --------------------------------------------
+  // NEW: SEED LOGIC
+  // --------------------------------------------
+  const seed = opts.seed || {};
+
+  let storage;
+  let surface;
+
+  if (
+    seed.mode === "rolling" &&
+    Number.isFinite(seed.storage) &&
+    Number.isFinite(seed.surface)
+  ) {
+    storage = clamp(seed.storage, 0, factors.Smax);
+    surface = clamp(seed.surface, 0, 10);
+  } else {
+    // baseline (new field OR location change)
+    storage = clamp(0.1 * factors.Smax, 0, factors.Smax);
+    surface = 0;
+  }
 
   const trace = [];
 
   for (const row of weatherRows) {
     const before = storage;
 
-    // --------------------------------------------
-    // DRYING POWER
-    // --------------------------------------------
     const dry = calcDryingPower(row);
 
-    // --------------------------------------------
-    // RAIN INPUT
-    // --------------------------------------------
     const rain = Number(row.rainInAdj ?? row.rainIn ?? 0);
 
     // --------------------------------------------
@@ -75,7 +87,7 @@ function runSoilModel(weatherRows, field) {
     surface += surfaceAdd;
 
     // --------------------------------------------
-    // EFFECTIVE RAIN TO SOIL
+    // EFFECTIVE RAIN
     // --------------------------------------------
     let rainEff = effectiveRainInches(
       rain,
@@ -84,39 +96,29 @@ function runSoilModel(weatherRows, field) {
       factors
     );
 
-    // --------------------------------------------
-    // INFILTRATION
-    // --------------------------------------------
     const addRain = rainEff * factors.infilMult;
 
     // --------------------------------------------
-    // SURFACE → SOIL HANDOFF
+    // SURFACE → SOIL
     // --------------------------------------------
     const handoffFrac = surfaceToStorageFrac(row);
     const surfaceToSoil = surface * handoffFrac;
 
     surface -= surfaceToSoil;
 
-    // --------------------------------------------
-    // TOTAL ADD
-    // --------------------------------------------
     const add = addRain + surfaceToSoil;
 
     // --------------------------------------------
-    // DRYING (SOIL)
+    // DRYING
     // --------------------------------------------
     let loss =
       Number(dry.dryPwr || 0) *
       LOSS_SCALE *
       factors.dryMult;
 
-    // surface slows soil drying
     const surfaceDryMult = surfaceWetHoldDryMult(surface);
     loss *= surfaceDryMult;
 
-    // --------------------------------------------
-    // UPDATE STORAGE
-    // --------------------------------------------
     let after = before + add - loss;
 
     // --------------------------------------------
@@ -134,7 +136,6 @@ function runSoilModel(weatherRows, field) {
     // --------------------------------------------
     surface = clamp(surface, 0, 10);
 
-    // soil cannot go below surface-driven floor
     const floor = surfaceDrivenStorageFloor(
       surface,
       factors.Smax
@@ -144,15 +145,9 @@ function runSoilModel(weatherRows, field) {
 
     storage = after;
 
-    // --------------------------------------------
-    // PENALTY
-    // --------------------------------------------
     const surfacePenalty =
       surfacePenaltyFromStorage(surface);
 
-    // --------------------------------------------
-    // OUTPUT
-    // --------------------------------------------
     trace.push({
       dateISO: row.dateISO,
 
@@ -169,7 +164,6 @@ function runSoilModel(weatherRows, field) {
       surfaceLoss,
 
       dryPwr: dry.dryPwr,
-
       surfacePenalty
     });
   }
@@ -178,7 +172,10 @@ function runSoilModel(weatherRows, field) {
     trace,
     storageFinal: storage,
     surfaceFinal: surface,
-    factors
+    factors,
+
+    // DEBUG
+    seedMode: seed.mode || "baseline_30d"
   };
 }
 
