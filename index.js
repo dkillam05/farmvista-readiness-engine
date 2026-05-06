@@ -1,7 +1,7 @@
 // ============================================
 // FILE: index.js
 // PURPOSE:
-// Cloud Run runner + readiness engine
+// Cloud Run runner + readiness engine + Firestore write
 // ============================================
 
 const express = require("express");
@@ -23,9 +23,10 @@ const app = express();
 const FIELDS = "fields";
 const WEATHER = "field_weather_cache";
 const MRMS = "field_mrms_weather";
+const FIELD_CONDITIONS = "field_conditions_current";
 
 // --------------------------------------------
-// MAIN RUN (UNCHANGED LOGIC)
+// MAIN RUN
 // --------------------------------------------
 async function run() {
   console.log("🚜 Starting readiness run...");
@@ -33,6 +34,7 @@ async function run() {
   const fieldsSnap = await db.collection(FIELDS).get();
 
   const results = [];
+  const batch = db.batch(); // ✅ important
 
   for (const doc of fieldsSnap.docs) {
     const field = { id: doc.id, ...doc.data() };
@@ -64,6 +66,9 @@ async function run() {
     console.log("   Wetness:", result.wetness);
     console.log("   Surface:", result.surfaceStorageFinal);
 
+    // --------------------------------------------
+    // PUSH TO RESPONSE
+    // --------------------------------------------
     results.push({
       fieldId: doc.id,
       name: field.name,
@@ -71,7 +76,73 @@ async function run() {
       wetness: result.wetness,
       surface: result.surfaceStorageFinal
     });
+
+    // --------------------------------------------
+    // WRITE TO NEW CLEAN COLLECTION
+    // --------------------------------------------
+    const outRef = db.collection(FIELD_CONDITIONS).doc(doc.id);
+
+    batch.set(
+      outRef,
+      {
+        fieldId: doc.id,
+        fieldName: field.name || null,
+
+        farmId: field.farmId || null,
+        farmName: field.farmName || null,
+
+        location: field.location || null,
+        county: field.county || null,
+        state: field.state || null,
+
+        // -------------------------
+        // CORE OUTPUT
+        // -------------------------
+        readiness: Number(result.readiness),
+        wetness: Number(result.wetness),
+
+        baseReadiness: Number(result.baseReadiness ?? result.readiness),
+        surfacePenalty: Number(result.surfacePenalty ?? 0),
+
+        // -------------------------
+        // SOIL
+        // -------------------------
+        soil: {
+          storage: Number(result.storageFinal),
+          Smax: Number(result.factors?.Smax || 0)
+        },
+
+        // -------------------------
+        // SURFACE
+        // -------------------------
+        surface: {
+          water: Number(result.surfaceStorageFinal),
+          penalty: Number(result.surfacePenalty ?? 0)
+        },
+
+        // -------------------------
+        // TIMING
+        // -------------------------
+        asOfDateISO: new Date().toISOString().slice(0, 10),
+        computedAt: admin.firestore.FieldValue.serverTimestamp(),
+
+        // -------------------------
+        // DEBUG
+        // -------------------------
+        modelVersion: "2026-clean-rebuild",
+        source: "farmvista-engine",
+
+        status: "ok"
+      },
+      { merge: true }
+    );
   }
+
+  // --------------------------------------------
+  // COMMIT ALL WRITES
+  // --------------------------------------------
+  await batch.commit();
+  console.log("💾 Firestore write complete");
 
   console.log("\n✅ Run complete");
 
@@ -107,7 +178,7 @@ app.get("/run", async (req, res) => {
 });
 
 // --------------------------------------------
-// START SERVER (REQUIRED FOR CLOUD RUN)
+// START SERVER
 // --------------------------------------------
 const PORT = process.env.PORT || 8080;
 
