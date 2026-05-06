@@ -18,17 +18,11 @@ function mmToIn(mm) {
   return mm / 25.4;
 }
 
-function msToMph(ms) {
-  return ms * 2.23694;
-}
-
-function wToSolar(w) {
-  return w;
-}
-
 function avg(arr) {
   if (!arr.length) return null;
+
   const sum = arr.reduce((a, b) => a + b, 0);
+
   return sum / arr.length;
 }
 
@@ -37,14 +31,51 @@ function getTodayISO() {
 }
 
 // --------------------------------------------
+// OPEN-METEO SOLAR CONVERSION
+// MJ/m²/day → average W/m²
+// --------------------------------------------
+function mjToAvgWatts(mj) {
+  return Number(mj || 0) * 11.574;
+}
+
+// --------------------------------------------
 // MAIN FETCH
 // --------------------------------------------
 async function fetchWeather(lat, lng) {
   const todayISO = getTodayISO();
 
-  const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lng}&timezone=auto&past_days=30&forecast_days=7&hourly=temperature_2m,relative_humidity_2m,wind_speed_10m,shortwave_radiation,precipitation,et0_fao_evapotranspiration,soil_moisture_0_to_10cm,soil_temperature_0_to_10cm&daily=temperature_2m_max,temperature_2m_min,precipitation_sum,et0_fao_evapotranspiration,shortwave_radiation_sum`;
+  const url =
+    `https://api.open-meteo.com/v1/forecast` +
+    `?latitude=${lat}` +
+    `&longitude=${lng}` +
+    `&timezone=auto` +
+    `&past_days=30` +
+    `&forecast_days=7` +
+    `&temperature_unit=fahrenheit` +
+    `&wind_speed_unit=mph` +
+    `&precipitation_unit=inch` +
+    `&hourly=` +
+    [
+      "temperature_2m",
+      "relative_humidity_2m",
+      "wind_speed_10m",
+      "shortwave_radiation",
+      "precipitation",
+      "et0_fao_evapotranspiration",
+      "soil_moisture_0_to_10cm",
+      "soil_temperature_0_to_10cm"
+    ].join(",") +
+    `&daily=` +
+    [
+      "temperature_2m_max",
+      "temperature_2m_min",
+      "precipitation_sum",
+      "et0_fao_evapotranspiration",
+      "shortwave_radiation_sum"
+    ].join(",");
 
   const res = await fetch(url);
+
   const data = await res.json();
 
   if (!data || !data.hourly || !data.daily) {
@@ -55,7 +86,7 @@ async function fetchWeather(lat, lng) {
   const d = data.daily;
 
   // --------------------------------------------
-  // GROUP HOURLY BY DAY (FOR SOIL + WIND + RH)
+  // GROUP HOURLY BY DAY
   // --------------------------------------------
   const dailyBuckets = {};
 
@@ -68,26 +99,78 @@ async function fetchWeather(lat, lng) {
         sm: [],
         st: [],
         wind: [],
-        rh: []
+        rh: [],
+        solar: []
       };
     }
 
     const bucket = dailyBuckets[dateISO];
 
-    if (Number.isFinite(h.soil_moisture_0_to_10cm[i])) {
-      bucket.sm.push(h.soil_moisture_0_to_10cm[i]);
+    // --------------------------------------------
+    // SOIL MOISTURE
+    // --------------------------------------------
+    if (
+      Number.isFinite(
+        h.soil_moisture_0_to_10cm[i]
+      )
+    ) {
+      bucket.sm.push(
+        h.soil_moisture_0_to_10cm[i]
+      );
     }
 
-    if (Number.isFinite(h.soil_temperature_0_to_10cm[i])) {
-      bucket.st.push(cToF(h.soil_temperature_0_to_10cm[i]));
+    // --------------------------------------------
+    // SOIL TEMP
+    // --------------------------------------------
+    if (
+      Number.isFinite(
+        h.soil_temperature_0_to_10cm[i]
+      )
+    ) {
+      bucket.st.push(
+        cToF(
+          h.soil_temperature_0_to_10cm[i]
+        )
+      );
     }
 
-    if (Number.isFinite(h.wind_speed_10m[i])) {
-      bucket.wind.push(msToMph(h.wind_speed_10m[i]));
+    // --------------------------------------------
+    // WIND (already MPH)
+    // --------------------------------------------
+    if (
+      Number.isFinite(
+        h.wind_speed_10m[i]
+      )
+    ) {
+      bucket.wind.push(
+        h.wind_speed_10m[i]
+      );
     }
 
-    if (Number.isFinite(h.relative_humidity_2m[i])) {
-      bucket.rh.push(h.relative_humidity_2m[i]);
+    // --------------------------------------------
+    // RH
+    // --------------------------------------------
+    if (
+      Number.isFinite(
+        h.relative_humidity_2m[i]
+      )
+    ) {
+      bucket.rh.push(
+        h.relative_humidity_2m[i]
+      );
+    }
+
+    // --------------------------------------------
+    // SOLAR
+    // --------------------------------------------
+    if (
+      Number.isFinite(
+        h.shortwave_radiation[i]
+      )
+    ) {
+      bucket.solar.push(
+        h.shortwave_radiation[i]
+      );
     }
   }
 
@@ -99,30 +182,55 @@ async function fetchWeather(lat, lng) {
   for (let i = 0; i < d.time.length; i++) {
     const dateISO = d.time[i];
 
+    // today handled separately
     if (dateISO === todayISO) continue;
 
-    const bucket = dailyBuckets[dateISO] || {};
+    const bucket =
+      dailyBuckets[dateISO] || {};
 
     dailySeries.push({
       dateISO,
 
-      rainIn: mmToIn(d.precipitation_sum[i] || 0),
+      // --------------------------------------------
+      // WEATHER
+      // --------------------------------------------
+      rainIn:
+        Number(d.precipitation_sum[i]) || 0,
 
-      tempF: cToF(
-        ((d.temperature_2m_max[i] || 0) +
-          (d.temperature_2m_min[i] || 0)) / 2
-      ),
+      tempF:
+        (
+          (Number(d.temperature_2m_max[i]) || 0) +
+          (Number(d.temperature_2m_min[i]) || 0)
+        ) / 2,
 
-      windMph: avg(bucket.wind) ?? 8,
-      rh: avg(bucket.rh) ?? 70,
+      windMph:
+        avg(bucket.wind) ?? 8,
 
-      solarWm2: (d.shortwave_radiation_sum[i] || 0) / 86400,
+      rh:
+        avg(bucket.rh) ?? 70,
 
-      et0In: mmToIn(d.et0_fao_evapotranspiration[i] || 0),
+      // --------------------------------------------
+      // FIXED SOLAR
+      // --------------------------------------------
+      solarWm2:
+        avg(bucket.solar) ??
+        mjToAvgWatts(
+          d.shortwave_radiation_sum[i]
+        ),
 
-      // ✅ FIXED
-      sm010: avg(bucket.sm),
-      st010: avg(bucket.st)
+      et0In:
+        Number(
+          d.et0_fao_evapotranspiration[i]
+        ) || 0,
+
+      // --------------------------------------------
+      // SOIL
+      // --------------------------------------------
+      sm010:
+        avg(bucket.sm),
+
+      st010:
+        avg(bucket.st)
     });
   }
 
@@ -140,19 +248,48 @@ async function fetchWeather(lat, lng) {
     hourlyToday.push({
       timeISO: t,
 
-      tempF: cToF(h.temperature_2m[i] || 0),
-      windMph: msToMph(h.wind_speed_10m[i] || 0),
-      rh: h.relative_humidity_2m[i] || 0,
+      tempF:
+        Number(h.temperature_2m[i]) || 0,
 
-      solarWm2: wToSolar(h.shortwave_radiation[i] || 0),
+      // already MPH
+      windMph:
+        Number(h.wind_speed_10m[i]) || 0,
 
-      rainIn: mmToIn(h.precipitation[i] || 0),
-      et0In: mmToIn(h.et0_fao_evapotranspiration[i] || 0),
+      rh:
+        Number(
+          h.relative_humidity_2m[i]
+        ) || 0,
 
-      sm010: h.soil_moisture_0_to_10cm[i] ?? null,
-      st010: Number.isFinite(h.soil_temperature_0_to_10cm[i])
-        ? cToF(h.soil_temperature_0_to_10cm[i])
-        : null
+      solarWm2:
+        Number(
+          h.shortwave_radiation[i]
+        ) || 0,
+
+      rainIn:
+        Number(
+          h.precipitation[i]
+        ) || 0,
+
+      et0In:
+        Number(
+          h.et0_fao_evapotranspiration[i]
+        ) || 0,
+
+      sm010:
+        Number.isFinite(
+          h.soil_moisture_0_to_10cm[i]
+        )
+          ? h.soil_moisture_0_to_10cm[i]
+          : null,
+
+      st010:
+        Number.isFinite(
+          h.soil_temperature_0_to_10cm[i]
+        )
+          ? cToF(
+              h.soil_temperature_0_to_10cm[i]
+            )
+          : null
     });
   }
 
@@ -169,22 +306,34 @@ async function fetchWeather(lat, lng) {
     dailyForecast.push({
       dateISO,
 
-      rainIn: mmToIn(d.precipitation_sum[i] || 0),
+      rainIn:
+        Number(d.precipitation_sum[i]) || 0,
 
-      tempF: cToF(
-        ((d.temperature_2m_max[i] || 0) +
-          (d.temperature_2m_min[i] || 0)) / 2
-      ),
+      tempF:
+        (
+          (Number(d.temperature_2m_max[i]) || 0) +
+          (Number(d.temperature_2m_min[i]) || 0)
+        ) / 2,
 
       windMph: 8,
+
       rh: 70,
 
-      solarWm2: (d.shortwave_radiation_sum[i] || 0) / 86400,
+      solarWm2:
+        mjToAvgWatts(
+          d.shortwave_radiation_sum[i]
+        ),
 
-      et0In: mmToIn(d.et0_fao_evapotranspiration[i] || 0)
+      et0In:
+        Number(
+          d.et0_fao_evapotranspiration[i]
+        ) || 0
     });
   }
 
+  // --------------------------------------------
+  // RETURN
+  // --------------------------------------------
   return {
     dailySeries,
     hourlyToday,
@@ -192,8 +341,11 @@ async function fetchWeather(lat, lng) {
 
     meta: {
       todayISO,
-      histDays: dailySeries.length,
-      fcstDays: dailyForecast.length
+      histDays:
+        dailySeries.length,
+
+      fcstDays:
+        dailyForecast.length
     }
   };
 }
