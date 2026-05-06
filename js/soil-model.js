@@ -48,10 +48,15 @@ function runSoilModel(weatherRows, field, opts = {}) {
   const drainageIndex = Number(field?.drainageIndex || 50);
 
   const last = weatherRows[weatherRows.length - 1];
-  const factors = mapFactors(soilWetness, drainageIndex, last?.sm010);
+
+  const factors = mapFactors(
+    soilWetness,
+    drainageIndex,
+    last?.sm010
+  );
 
   // --------------------------------------------
-  // NEW: SEED LOGIC
+  // SEED LOGIC
   // --------------------------------------------
   const seed = opts.seed || {};
 
@@ -71,19 +76,37 @@ function runSoilModel(weatherRows, field, opts = {}) {
     surface = 0;
   }
 
+  // --------------------------------------------
+  // TRACE
+  // --------------------------------------------
   const trace = [];
 
+  // --------------------------------------------
+  // LOOP DAYS
+  // --------------------------------------------
   for (const row of weatherRows) {
     const before = storage;
 
+    // --------------------------------------------
+    // DRYING POWER
+    // --------------------------------------------
     const dry = calcDryingPower(row);
 
-    const rain = Number(row.rainInAdj ?? row.rainIn ?? 0);
+    // --------------------------------------------
+    // RAIN
+    // --------------------------------------------
+    const rain = Number(
+      row.rainInAdj ??
+      row.rainIn ??
+      0
+    );
 
     // --------------------------------------------
     // SURFACE ADD
     // --------------------------------------------
-    const surfaceAdd = surfaceStorageAddFromRain(rain);
+    const surfaceAdd =
+      surfaceStorageAddFromRain(rain);
+
     surface += surfaceAdd;
 
     // --------------------------------------------
@@ -96,38 +119,50 @@ function runSoilModel(weatherRows, field, opts = {}) {
       factors
     );
 
-    const addRain = rainEff * factors.infilMult;
+    const addRain =
+      rainEff * factors.infilMult;
 
     // --------------------------------------------
     // SURFACE → SOIL
     // --------------------------------------------
-    const handoffFrac = surfaceToStorageFrac(row);
-    const surfaceToSoil = surface * handoffFrac;
+    const handoffFrac =
+      surfaceToStorageFrac(row);
+
+    const surfaceToSoil =
+      surface * handoffFrac;
 
     surface -= surfaceToSoil;
 
-    const add = addRain + surfaceToSoil;
+    const add =
+      addRain + surfaceToSoil;
 
     // --------------------------------------------
-    // DRYING
+    // DRYING LOSS
     // --------------------------------------------
     let loss =
       Number(dry.dryPwr || 0) *
       LOSS_SCALE *
       factors.dryMult;
 
-    const surfaceDryMult = surfaceWetHoldDryMult(surface);
+    const surfaceDryMult =
+      surfaceWetHoldDryMult(surface);
+
     loss *= surfaceDryMult;
 
-    let after = before + add - loss;
+    // --------------------------------------------
+    // STORAGE UPDATE
+    // --------------------------------------------
+    let after =
+      before + add - loss;
 
     // --------------------------------------------
-    // SURFACE DRYING
+    // SURFACE DRYDOWN
     // --------------------------------------------
-    const surfaceLoss = surfaceDrydownInchesPerDay(
-      dry,
-      row.et0N || 0
-    );
+    const surfaceLoss =
+      surfaceDrydownInchesPerDay(
+        dry,
+        row.et0N || 0
+      );
 
     surface -= surfaceLoss;
 
@@ -136,46 +171,101 @@ function runSoilModel(weatherRows, field, opts = {}) {
     // --------------------------------------------
     surface = clamp(surface, 0, 10);
 
-    const floor = surfaceDrivenStorageFloor(
-      surface,
+    const floor =
+      surfaceDrivenStorageFloor(
+        surface,
+        factors.Smax
+      );
+
+    after = clamp(
+      after,
+      floor,
       factors.Smax
     );
 
-    after = clamp(after, floor, factors.Smax);
-
     storage = after;
 
+    // --------------------------------------------
+    // SURFACE PENALTY
+    // --------------------------------------------
     const surfacePenalty =
       surfacePenaltyFromStorage(surface);
 
+    // --------------------------------------------
+    // TRACE SAVE
+    // --------------------------------------------
     trace.push({
       dateISO: row.dateISO,
 
+      // --------------------------------------------
+      // STORAGE
+      // --------------------------------------------
       storage: round(storage, 3),
       surface: round(surface, 3),
 
-      rain,
-      rainEff,
-      addRain,
-      surfaceAdd,
-      surfaceToSoil,
+      // --------------------------------------------
+      // RAIN
+      // --------------------------------------------
+      rain: round(rain, 4),
+      rainEff: round(rainEff, 4),
 
-      loss,
-      surfaceLoss,
+      addRain: round(addRain, 4),
 
-      dryPwr: dry.dryPwr,
-      surfacePenalty
+      surfaceAdd: round(surfaceAdd, 4),
+      surfaceToSoil: round(surfaceToSoil, 4),
+
+      // --------------------------------------------
+      // DRYING
+      // --------------------------------------------
+      loss: round(loss, 4),
+      surfaceLoss: round(surfaceLoss, 4),
+
+      // --------------------------------------------
+      // DRY POWER BREAKDOWN
+      // --------------------------------------------
+      dryPwr: round(dry.dryPwr, 4),
+
+      temp: round(dry.temp, 2),
+      tempN: round(dry.tempN, 4),
+
+      wind: round(dry.wind, 2),
+      windN: round(dry.windN, 4),
+
+      rh: round(dry.rh, 2),
+      rhN: round(dry.rhN, 4),
+
+      solar: round(dry.solar, 4),
+      solarN: round(dry.solarN, 4),
+
+      vpd: round(dry.vpd, 4),
+      vpdN: round(dry.vpdN, 4),
+
+      cloud: round(dry.cloud, 2),
+      cloudN: round(dry.cloudN, 4),
+
+      raw: round(dry.raw, 4),
+
+      // --------------------------------------------
+      // SURFACE
+      // --------------------------------------------
+      surfacePenalty: round(surfacePenalty, 4)
     });
   }
 
+  // --------------------------------------------
+  // RETURN
+  // --------------------------------------------
   return {
     trace,
+
     storageFinal: storage,
     surfaceFinal: surface,
+
     factors,
 
     // DEBUG
-    seedMode: seed.mode || "baseline_30d"
+    seedMode:
+      seed.mode || "baseline_30d"
   };
 }
 
