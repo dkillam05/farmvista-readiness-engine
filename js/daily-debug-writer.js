@@ -10,14 +10,36 @@ const admin = require("firebase-admin");
 // --------------------------------------------
 // HELPERS
 // --------------------------------------------
-function round(v, d = 3) {
-  const p = Math.pow(10, d);
-  return Math.round(Number(v) * p) / p;
-}
-
 function safeNum(v, fallback = null) {
   const n = Number(v);
   return Number.isFinite(n) ? n : fallback;
+}
+
+function safeStr(v, fallback = null) {
+  if (v === undefined || v === null) return fallback;
+  const s = String(v);
+  return s ? s : fallback;
+}
+
+function todayISO() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function toISODate(v) {
+  if (!v) return null;
+  return String(v).slice(0, 10);
+}
+
+function buildTraceMap(trace) {
+  const map = new Map();
+
+  for (const t of Array.isArray(trace) ? trace : []) {
+    const iso = toISODate(t?.dateISO);
+    if (!iso) continue;
+    map.set(iso, t);
+  }
+
+  return map;
 }
 
 // --------------------------------------------
@@ -35,114 +57,81 @@ async function writeDailyDebug({
   }
 
   const fieldId = field.id;
+  const fieldName = field.name || null;
+  const nowISO = new Date().toISOString();
+  const today = todayISO();
 
-  // --------------------------------------------
-  // COLLECTION
-  // --------------------------------------------
+  const rows = Array.isArray(result.rows) ? result.rows : [];
+  const trace = Array.isArray(result.trace) ? result.trace : [];
+  const traceMap = buildTraceMap(trace);
+
+  if (!rows.length) {
+    console.log(`🧠 No debug rows to save for ${fieldName || fieldId}`);
+    return;
+  }
+
   const dailyRef = db
     .collection("field_conditions_current")
     .doc(fieldId)
     .collection("daily");
 
-  // --------------------------------------------
-  // WEATHER ROWS USED IN MATH
-  // --------------------------------------------
-  const rows = Array.isArray(result.rows)
-    ? result.rows
-    : [];
+  const batch = db.batch();
+  let writes = 0;
 
-  // --------------------------------------------
-  // TRACE FROM SOIL MODEL
-  // --------------------------------------------
-  const trace = Array.isArray(result.trace)
-    ? result.trace
-    : [];
-
-  // --------------------------------------------
-  // MAP TRACE BY DATE
-  // --------------------------------------------
-  const traceMap = {};
-
-  for (const t of trace) {
-    if (!t?.dateISO) continue;
-    traceMap[t.dateISO] = t;
-  }
-
-  // --------------------------------------------
-  // BUILD DAILY DOCS
-  // --------------------------------------------
   for (const row of rows) {
-    const dateISO = row.dateISO;
-
+    const dateISO = toISODate(row?.dateISO);
     if (!dateISO) continue;
 
-    const t = traceMap[dateISO] || {};
-
-    // --------------------------------------------
-    // RAIN SOURCE LOGIC
-    // --------------------------------------------
-    const isForecast =
-      dateISO > new Date().toISOString().slice(0, 10);
+    const t = traceMap.get(dateISO) || {};
+    const isForecast = dateISO > today;
 
     const rainOpenMeteoIn = safeNum(
       row.rainOpenMeteoIn ?? row.rainIn ?? 0,
       0
     );
 
-    const rainMrmsIn = safeNum(
-      row.rainMrmsIn,
-      null
-    );
+    const rainMrmsIn = safeNum(row.rainMrmsIn, null);
 
     let rainUsedInMath = rainOpenMeteoIn;
-    let rainSource = "open-meteo-forecast";
+    let rainSource = isForecast ? "open-meteo-forecast" : "missing-mrms";
 
-    // historical/today should use MRMS
-    if (!isForecast) {
-      if (Number.isFinite(rainMrmsIn)) {
-        rainUsedInMath = rainMrmsIn;
-        rainSource = "mrms";
-      } else {
-        rainUsedInMath = null;
-        rainSource = "missing-mrms";
-      }
+    if (!isForecast && Number.isFinite(rainMrmsIn)) {
+      rainUsedInMath = rainMrmsIn;
+      rainSource = "mrms";
     }
 
-    // --------------------------------------------
-    // BUILD HOURLY TRACE ENTRY
-    // --------------------------------------------
-    const hourlyEntry = {
-      computedAt: admin.firestore.FieldValue.serverTimestamp(),
+    const dailyWeather = {
+      rainSource,
+      rainUsedInMath,
+      rainMrmsIn,
+      rainOpenMeteoIn,
 
-      // --------------------------------------------
-      // WEATHER
-      // --------------------------------------------
       tempF: safeNum(row.tempF),
       windMph: safeNum(row.windMph),
       rh: safeNum(row.rh),
       solarWm2: safeNum(row.solarWm2),
 
+      et0In: safeNum(row.et0In),
       sm010: safeNum(row.sm010),
       st010: safeNum(row.st010),
 
-      // --------------------------------------------
-      // RAINFALL
-      // --------------------------------------------
-      rainSource,
+      vpd: safeNum(row.vpd),
+      vpdN: safeNum(row.vpdN),
+      cloud: safeNum(row.cloud),
+      cloudN: safeNum(row.cloudN)
+    };
 
-      rainMrmsIn,
-      rainOpenMeteoIn,
-
-      rainUsedInMath,
-
-      // --------------------------------------------
-      // DRY POWER BREAKDOWN
-      // --------------------------------------------
-      dryPwr: safeNum(t.dryPwr),
-
+    const dryPwrBreakdown = {
+      temp: safeNum(row.temp ?? row.tempF),
       tempN: safeNum(row.tempN),
+
+      wind: safeNum(row.wind ?? row.windMph),
       windN: safeNum(row.windN),
+
+      rh: safeNum(row.rh),
       rhN: safeNum(row.rhN),
+
+      solar: safeNum(row.solar ?? row.solarWm2),
       solarN: safeNum(row.solarN),
 
       vpd: safeNum(row.vpd),
@@ -151,19 +140,19 @@ async function writeDailyDebug({
       cloud: safeNum(row.cloud),
       cloudN: safeNum(row.cloudN),
 
-      dryRaw: safeNum(row.dryRaw),
+      raw: safeNum(row.raw ?? row.dryRaw),
+      dryPwr: safeNum(t.dryPwr ?? row.dryPwr)
+    };
 
-      // --------------------------------------------
-      // SOIL TRACE
-      // --------------------------------------------
+    const modelTrace = {
       storage: safeNum(t.storage),
       surface: safeNum(t.surface),
 
+      rain: safeNum(t.rain ?? rainUsedInMath),
       rainEff: safeNum(t.rainEff),
 
       addRain: safeNum(t.addRain),
       surfaceAdd: safeNum(t.surfaceAdd),
-
       surfaceToSoil: safeNum(t.surfaceToSoil),
 
       loss: safeNum(t.loss),
@@ -172,82 +161,57 @@ async function writeDailyDebug({
       surfacePenalty: safeNum(t.surfacePenalty)
     };
 
-    // --------------------------------------------
-    // DAILY DOC REF
-    // --------------------------------------------
     const docRef = dailyRef.doc(dateISO);
 
-    // --------------------------------------------
-    // WRITE DAILY STRUCTURE
-    // --------------------------------------------
-    await docRef.set(
+    batch.set(
+      docRef,
       {
         fieldId,
-        fieldName: field.name || null,
+        fieldName,
 
         dateISO,
 
-        updatedAt:
-          admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAtISO: nowISO,
 
-        // --------------------------------------------
-        // FINAL DAILY SNAPSHOT
-        // --------------------------------------------
+        weather: dailyWeather,
+        dryPwrBreakdown,
+        trace: modelTrace,
+
+        factors: result.factors || {},
+
         final: {
           readiness: safeNum(result.readiness),
           wetness: safeNum(result.wetness),
+          baseReadiness: safeNum(result.baseReadiness),
+          surfacePenalty: safeNum(result.surfacePenalty),
 
           storageFinal: safeNum(result.storageFinal),
-
-          surfaceFinal: safeNum(
-            result.surfaceStorageFinal
-          )
+          storageForReadiness: safeNum(result.storageForReadiness),
+          surfaceFinal: safeNum(result.surfaceStorageFinal)
         },
 
-        // --------------------------------------------
-        // FACTORS
-        // --------------------------------------------
-        factors: result.factors || {},
-
-        // --------------------------------------------
-        // DAILY WEATHER SUMMARY
-        // --------------------------------------------
-        weather: {
-          rainSource,
-
-          rainUsedInMath,
-
-          rainMrmsIn,
-          rainOpenMeteoIn,
-
-          tempF: safeNum(row.tempF),
-          windMph: safeNum(row.windMph),
-          rh: safeNum(row.rh),
-
-          solarWm2: safeNum(row.solarWm2),
-
-          sm010: safeNum(row.sm010),
-          st010: safeNum(row.st010)
+        debug: {
+          source: "daily-debug-writer",
+          rainRule: isForecast
+            ? "forecast uses Open-Meteo rainfall"
+            : "history/today uses MRMS rainfall",
+          modelVersion: safeStr(result?.debug?.modelVersion),
+          seedMode: safeStr(result?.debug?.seedMode)
         }
       },
       { merge: true }
     );
 
-    // --------------------------------------------
-    // APPEND HOURLY TRACE
-    // --------------------------------------------
-    await docRef.set(
-      {
-        hourly: admin.firestore.FieldValue.arrayUnion(
-          hourlyEntry
-        )
-      },
-      { merge: true }
-    );
+    writes++;
+  }
+
+  if (writes > 0) {
+    await batch.commit();
   }
 
   console.log(
-    `🧠 Debug daily traces saved for ${field.name}`
+    `🧠 Debug daily docs saved for ${fieldName || fieldId}: ${writes}`
   );
 }
 
