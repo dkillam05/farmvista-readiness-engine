@@ -1,8 +1,15 @@
 // ============================================
 // FILE: /js/weather-merge.js
 // PURPOSE:
-// Merge weather cache + MRMS rainfall into
-// clean daily + hourly rows for readiness model
+// Merge Open-Meteo weather + MRMS rainfall
+// into FINAL model-ready rows
+//
+// IMPORTANT RULES:
+// ✔ Historical rainfall = MRMS
+// ✔ Forecast rainfall = Open-Meteo
+// ✔ Preserve ALL weather fields
+// ✔ Do NOT reshape schema
+// ✔ Do NOT collapse rows
 // ============================================
 
 // --------------------------------------------
@@ -19,7 +26,16 @@ function toISODate(str) {
 
 function toISOHour(str) {
   if (!str) return null;
-  return String(str).slice(0, 13); // YYYY-MM-DDTHH
+  return String(str).slice(0, 13);
+}
+
+function safeNum(v, fallback = 0) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function getTodayISO() {
+  return new Date().toISOString().slice(0, 10);
 }
 
 // --------------------------------------------
@@ -28,36 +44,50 @@ function toISOHour(str) {
 function buildMrmsDailyMap(mrmsDoc) {
   const map = new Map();
 
-  const rows = Array.isArray(mrmsDoc?.mrmsDailySeries30d)
+  const rows = Array.isArray(
+    mrmsDoc?.mrmsDailySeries30d
+  )
     ? mrmsDoc.mrmsDailySeries30d
     : [];
 
   for (const r of rows) {
-    const iso = toISODate(r.dateISO);
+    const iso = toISODate(r?.dateISO);
+
     if (!iso) continue;
 
-    map.set(iso, mmToIn(r.rainMm));
+    map.set(iso, {
+      rainIn: mmToIn(r?.rainMm),
+      rainMm: safeNum(r?.rainMm),
+      hoursCount: safeNum(r?.hoursCount)
+    });
   }
 
   return map;
 }
 
 // --------------------------------------------
-// MRMS HOURLY MAP (TODAY)
+// MRMS HOURLY MAP
 // --------------------------------------------
 function buildMrmsHourlyMap(mrmsDoc) {
   const map = new Map();
 
-  const rows = Array.isArray(mrmsDoc?.mrmsHourlyLast24)
+  const rows = Array.isArray(
+    mrmsDoc?.mrmsHourlyLast24
+  )
     ? mrmsDoc.mrmsHourlyLast24
     : [];
 
   for (const r of rows) {
-    const ts = r.fileTimestampUtc;
+    const ts = r?.fileTimestampUtc;
+
     if (!ts) continue;
 
     const isoHour = toISOHour(ts);
-    map.set(isoHour, mmToIn(r.rainMm));
+
+    map.set(isoHour, {
+      rainIn: mmToIn(r?.rainMm),
+      rainMm: safeNum(r?.rainMm)
+    });
   }
 
   return map;
@@ -73,61 +103,118 @@ function mergeDaily(wx, mrmsDoc) {
 
   const mrmsDaily = buildMrmsDailyMap(mrmsDoc);
 
+  const todayISO = getTodayISO();
+
   return baseRows.map((r) => {
-    const iso = toISODate(r.dateISO);
+    const iso = toISODate(r?.dateISO);
 
-    const rainIn = mrmsDaily.has(iso)
-      ? mrmsDaily.get(iso)
-      : (r.rainIn || 0);
+    const isForecast = iso > todayISO;
 
+    const mrms = mrmsDaily.get(iso);
+
+    // --------------------------------------------
+    // RAINFALL SOURCE LOGIC
+    // --------------------------------------------
+    let rainIn = safeNum(r?.rainIn);
+
+    let rainSource = "open-meteo";
+
+    let rainMrmsIn = null;
+
+    let rainOpenMeteoIn = safeNum(r?.rainIn);
+
+    // Historical + today = MRMS
+    if (!isForecast && mrms) {
+      rainIn = safeNum(mrms.rainIn);
+
+      rainMrmsIn = safeNum(mrms.rainIn);
+
+      rainSource = "mrms";
+    }
+
+    // Forecast = Open-Meteo
+    if (isForecast) {
+      rainSource = "open-meteo-forecast";
+    }
+
+    // --------------------------------------------
+    // IMPORTANT:
+    // preserve ALL original fields
+    // --------------------------------------------
     return {
+      ...r,
+
       dateISO: iso,
+
+      // FINAL rain used by model
       rainIn,
-      tempAvg: r.tempAvg ?? null,
-      tempMax: r.tempMax ?? null,
-      tempMin: r.tempMin ?? null,
-      humidity: r.humidity ?? null,
-      wind: r.wind ?? null,
-      solar: r.solar ?? null,
-      rainSource: mrmsDaily.has(iso) ? "mrms-daily" : "weather"
+
+      // DEBUG / TRANSPARENCY
+      rainMrmsIn,
+      rainOpenMeteoIn,
+
+      rainSource
     };
   });
 }
 
 // --------------------------------------------
-// HOURLY MERGE (CRITICAL FOR TODAY)
+// HOURLY MERGE
 // --------------------------------------------
 function mergeHourly(wx, mrmsDoc) {
-  const baseRows = Array.isArray(wx?.hourlySeries)
-    ? wx.hourlySeries
+  const baseRows = Array.isArray(wx?.hourlyToday)
+    ? wx.hourlyToday
     : [];
 
   const mrmsHourly = buildMrmsHourlyMap(mrmsDoc);
 
   return baseRows.map((r) => {
-    const isoHour = toISOHour(r.time || r.dateTimeISO);
+    const isoHour = toISOHour(
+      r?.timeISO || r?.time
+    );
 
-    const rainIn = mrmsHourly.has(isoHour)
-      ? mrmsHourly.get(isoHour)
-      : (r.rainIn || 0);
+    const mrms = mrmsHourly.get(isoHour);
+
+    let rainIn = safeNum(r?.rainIn);
+
+    let rainSource = "open-meteo";
+
+    let rainMrmsIn = null;
+
+    let rainOpenMeteoIn = safeNum(r?.rainIn);
+
+    // --------------------------------------------
+    // USE MRMS FOR CURRENT DAY HOURLY
+    // --------------------------------------------
+    if (mrms) {
+      rainIn = safeNum(mrms.rainIn);
+
+      rainMrmsIn = safeNum(mrms.rainIn);
+
+      rainSource = "mrms-hourly";
+    }
 
     return {
-      time: isoHour,
+      ...r,
+
+      timeISO: r?.timeISO || null,
+
       rainIn,
-      temp: r.temp ?? null,
-      humidity: r.humidity ?? null,
-      wind: r.wind ?? null,
-      solar: r.solar ?? null,
-      rainSource: mrmsHourly.has(isoHour) ? "mrms-hourly" : "weather"
+
+      rainMrmsIn,
+      rainOpenMeteoIn,
+
+      rainSource
     };
   });
 }
 
 // --------------------------------------------
-// MAIN EXPORT
+// MAIN MERGE
 // --------------------------------------------
 function mergeWeather(wx, mrmsDoc) {
   const daily = mergeDaily(wx, mrmsDoc);
+
   const hourly = mergeHourly(wx, mrmsDoc);
 
   return {
@@ -136,6 +223,9 @@ function mergeWeather(wx, mrmsDoc) {
   };
 }
 
+// --------------------------------------------
+// EXPORT
+// --------------------------------------------
 module.exports = {
   mergeWeather
 };
