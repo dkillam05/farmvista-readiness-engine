@@ -2,10 +2,11 @@
 // FILE: /js/soil-model.js
 // PURPOSE:
 // FULL model loop (WITH SEED SUPPORT)
+// Dynamic infiltration wired in
 // ============================================
 
 const { calcDryingPower } = require("./drying-power");
-const { mapFactors } = require("./infiltration");
+const { mapFactors, dynamicInfiltration } = require("./infiltration");
 const { effectiveRainInches } = require("./rain-effective");
 
 const {
@@ -71,14 +72,10 @@ function runSoilModel(weatherRows, field, opts = {}) {
     storage = clamp(seed.storage, 0, factors.Smax);
     surface = clamp(seed.surface, 0, 10);
   } else {
-    // baseline (new field OR location change)
     storage = clamp(0.1 * factors.Smax, 0, factors.Smax);
     surface = 0;
   }
 
-  // --------------------------------------------
-  // TRACE
-  // --------------------------------------------
   const trace = [];
 
   // --------------------------------------------
@@ -87,14 +84,8 @@ function runSoilModel(weatherRows, field, opts = {}) {
   for (const row of weatherRows) {
     const before = storage;
 
-    // --------------------------------------------
-    // DRYING POWER
-    // --------------------------------------------
     const dry = calcDryingPower(row);
 
-    // --------------------------------------------
-    // RAIN
-    // --------------------------------------------
     const rain = Number(
       row.rainInAdj ??
       row.rainIn ??
@@ -102,10 +93,32 @@ function runSoilModel(weatherRows, field, opts = {}) {
     );
 
     // --------------------------------------------
-    // SURFACE ADD
+    // DYNAMIC INFILTRATION
+    // Based on current soil storage, surface wetness,
+    // rain amount, soil type, and drainage class.
     // --------------------------------------------
-    const surfaceAdd =
+    const infil = dynamicInfiltration({
+      storage: before,
+      surface,
+      rain,
+      factors
+    });
+
+    // --------------------------------------------
+    // SURFACE ADD
+    // More runoff/surface holding when infiltration is poor.
+    // Less surface holding when dry soil can absorb.
+    // --------------------------------------------
+    const rawSurfaceAdd =
       surfaceStorageAddFromRain(rain);
+
+    const surfaceAdd =
+      rawSurfaceAdd *
+      clamp(
+        0.35 + infil.runoffFrac,
+        0.15,
+        1.25
+      );
 
     surface += surfaceAdd;
 
@@ -120,13 +133,23 @@ function runSoilModel(weatherRows, field, opts = {}) {
     );
 
     const addRain =
-      rainEff * factors.infilMult;
+      rainEff * infil.infilMult;
 
     // --------------------------------------------
     // SURFACE → SOIL
+    // Dry/open soils hand off surface water better.
+    // Saturated/ponded soils hand off slower.
     // --------------------------------------------
-    const handoffFrac =
+    const handoffFracBase =
       surfaceToStorageFrac(row);
+
+    const handoffFrac =
+      clamp(
+        handoffFracBase *
+          clamp(infil.infilMult, 0.15, 1.25),
+        0,
+        1
+      );
 
     const surfaceToSoil =
       surface * handoffFrac;
@@ -149,9 +172,6 @@ function runSoilModel(weatherRows, field, opts = {}) {
 
     loss *= surfaceDryMult;
 
-    // --------------------------------------------
-    // STORAGE UPDATE
-    // --------------------------------------------
     let after =
       before + add - loss;
 
@@ -161,14 +181,11 @@ function runSoilModel(weatherRows, field, opts = {}) {
     const surfaceLoss =
       surfaceDrydownInchesPerDay(
         dry,
-        row.et0N || 0
+        row.et0N || row.et0In || 0
       );
 
     surface -= surfaceLoss;
 
-    // --------------------------------------------
-    // CLAMPS
-    // --------------------------------------------
     surface = clamp(surface, 0, 10);
 
     const floor =
@@ -185,44 +202,36 @@ function runSoilModel(weatherRows, field, opts = {}) {
 
     storage = after;
 
-    // --------------------------------------------
-    // SURFACE PENALTY
-    // --------------------------------------------
     const surfacePenalty =
       surfacePenaltyFromStorage(surface);
 
-    // --------------------------------------------
-    // TRACE SAVE
-    // --------------------------------------------
     trace.push({
       dateISO: row.dateISO,
 
-      // --------------------------------------------
-      // STORAGE
-      // --------------------------------------------
       storage: round(storage, 3),
       surface: round(surface, 3),
 
-      // --------------------------------------------
-      // RAIN
-      // --------------------------------------------
       rain: round(rain, 4),
       rainEff: round(rainEff, 4),
+
+      // Dynamic infiltration shown in grid
+      infilMult: round(infil.infilMult, 4),
+      runoffFrac: round(infil.runoffFrac, 4),
+      saturation: round(infil.saturation, 4),
+      dryBoost: round(infil.dryBoost, 4),
+      saturationCollapse: round(infil.saturationCollapse, 4),
+      rainIntensityPenalty: round(infil.rainIntensityPenalty, 4),
+      infilSurfacePenalty: round(infil.surfacePenalty, 4),
 
       addRain: round(addRain, 4),
 
       surfaceAdd: round(surfaceAdd, 4),
+      rawSurfaceAdd: round(rawSurfaceAdd, 4),
       surfaceToSoil: round(surfaceToSoil, 4),
 
-      // --------------------------------------------
-      // DRYING
-      // --------------------------------------------
       loss: round(loss, 4),
       surfaceLoss: round(surfaceLoss, 4),
 
-      // --------------------------------------------
-      // DRY POWER BREAKDOWN
-      // --------------------------------------------
       dryPwr: round(dry.dryPwr, 4),
 
       temp: round(dry.temp, 2),
@@ -245,16 +254,10 @@ function runSoilModel(weatherRows, field, opts = {}) {
 
       raw: round(dry.raw, 4),
 
-      // --------------------------------------------
-      // SURFACE
-      // --------------------------------------------
       surfacePenalty: round(surfacePenalty, 4)
     });
   }
 
-  // --------------------------------------------
-  // RETURN
-  // --------------------------------------------
   return {
     trace,
 
@@ -263,15 +266,11 @@ function runSoilModel(weatherRows, field, opts = {}) {
 
     factors,
 
-    // DEBUG
     seedMode:
       seed.mode || "baseline_30d"
   };
 }
 
-// --------------------------------------------
-// EXPORT
-// --------------------------------------------
 module.exports = {
   runSoilModel
 };
