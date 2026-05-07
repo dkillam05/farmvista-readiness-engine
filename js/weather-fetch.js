@@ -3,10 +3,13 @@
 // PURPOSE:
 // Fetch Open-Meteo weather (history + today hourly + forecast)
 // WITH DAILY SOIL AGGREGATION (sm010 + st010)
+//
 // FIXED:
 // ✅ Added VPD
 // ✅ Added cloud cover
 // ✅ Removed double soil-temp conversion
+// ✅ Builds TODAY daily row from completed hourly data
+// ✅ Appends TODAY into dailySeries so readiness can dry down intraday
 // ============================================
 
 const fetch = require("node-fetch");
@@ -26,8 +29,39 @@ function avg(arr) {
   return sum / arr.length;
 }
 
-function getTodayISO() {
-  return new Date().toISOString().slice(0, 10);
+function sum(arr) {
+  if (!arr.length) return 0;
+
+  return arr.reduce((a, b) => a + b, 0);
+}
+
+function safeNum(v, fallback = null) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+// --------------------------------------------
+// OPEN-METEO LOCAL DATE/TIME
+// Uses API utc_offset_seconds so "today"
+// matches the field location, not Cloud Run UTC.
+// --------------------------------------------
+function getLocalNowParts(utcOffsetSeconds = 0) {
+  const now = new Date();
+  const localMs =
+    now.getTime() +
+    Number(utcOffsetSeconds || 0) * 1000;
+
+  const local = new Date(localMs);
+
+  const yyyy = local.getUTCFullYear();
+  const mm = String(local.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(local.getUTCDate()).padStart(2, "0");
+  const hh = String(local.getUTCHours()).padStart(2, "0");
+
+  return {
+    dateISO: `${yyyy}-${mm}-${dd}`,
+    hourISO: `${yyyy}-${mm}-${dd}T${hh}:00`
+  };
 }
 
 // --------------------------------------------
@@ -42,8 +76,6 @@ function mjToAvgWatts(mj) {
 // MAIN FETCH
 // --------------------------------------------
 async function fetchWeather(lat, lng) {
-  const todayISO = getTodayISO();
-
   const url =
     `https://api.open-meteo.com/v1/forecast` +
     `?latitude=${lat}` +
@@ -92,8 +124,18 @@ async function fetchWeather(lat, lng) {
   const h = data.hourly;
   const d = data.daily;
 
+  const localNow = getLocalNowParts(
+    data.utc_offset_seconds || 0
+  );
+
+  const todayISO = localNow.dateISO;
+  const currentHourISO = localNow.hourISO;
+
   // --------------------------------------------
   // GROUP HOURLY BY DAY
+  // IMPORTANT:
+  // For TODAY, only include completed/current hours.
+  // Do NOT average future forecast hours into today's row.
   // --------------------------------------------
   const dailyBuckets = {};
 
@@ -101,23 +143,75 @@ async function fetchWeather(lat, lng) {
     const t = h.time[i];
     const dateISO = t.slice(0, 10);
 
+    const isToday = dateISO === todayISO;
+
+    if (isToday && t > currentHourISO) {
+      continue;
+    }
+
     if (!dailyBuckets[dateISO]) {
       dailyBuckets[dateISO] = {
+        temp: [],
         sm: [],
         st: [],
         wind: [],
         rh: [],
         solar: [],
+        rain: [],
+        et0: [],
 
         // --------------------------------------------
         // NEW
         // --------------------------------------------
         vpd: [],
-        cloud: []
+        cloud: [],
+
+        hoursCount: 0
       };
     }
 
     const bucket = dailyBuckets[dateISO];
+
+    bucket.hoursCount++;
+
+    // --------------------------------------------
+    // TEMP
+    // --------------------------------------------
+    if (
+      Number.isFinite(
+        h.temperature_2m[i]
+      )
+    ) {
+      bucket.temp.push(
+        h.temperature_2m[i]
+      );
+    }
+
+    // --------------------------------------------
+    // RAIN
+    // --------------------------------------------
+    if (
+      Number.isFinite(
+        h.precipitation[i]
+      )
+    ) {
+      bucket.rain.push(
+        h.precipitation[i]
+      );
+    }
+
+    // --------------------------------------------
+    // ET0
+    // --------------------------------------------
+    if (
+      Number.isFinite(
+        h.et0_fao_evapotranspiration[i]
+      )
+    ) {
+      bucket.et0.push(
+        h.et0_fao_evapotranspiration[i]
+      );
+    }
 
     // --------------------------------------------
     // SOIL MOISTURE
@@ -215,17 +309,19 @@ async function fetchWeather(lat, lng) {
 
   // --------------------------------------------
   // BUILD DAILY HISTORY
+  // Includes today as a live intraday row.
   // --------------------------------------------
   const dailySeries = [];
 
   for (let i = 0; i < d.time.length; i++) {
     const dateISO = d.time[i];
 
-    // today handled separately
-    if (dateISO === todayISO) continue;
+    if (dateISO > todayISO) continue;
 
     const bucket =
       dailyBuckets[dateISO] || {};
+
+    const isToday = dateISO === todayISO;
 
     dailySeries.push({
       dateISO,
@@ -234,56 +330,79 @@ async function fetchWeather(lat, lng) {
       // WEATHER
       // --------------------------------------------
       rainIn:
-        Number(d.precipitation_sum[i]) || 0,
+        isToday
+          ? sum(bucket.rain || [])
+          : Number(d.precipitation_sum[i]) || 0,
 
       tempF:
-        (
-          (Number(d.temperature_2m_max[i]) || 0) +
-          (Number(d.temperature_2m_min[i]) || 0)
-        ) / 2,
+        isToday
+          ? avg(bucket.temp || []) ??
+            (
+              (Number(d.temperature_2m_max[i]) || 0) +
+              (Number(d.temperature_2m_min[i]) || 0)
+            ) / 2
+          : (
+              (Number(d.temperature_2m_max[i]) || 0) +
+              (Number(d.temperature_2m_min[i]) || 0)
+            ) / 2,
 
       windMph:
-        avg(bucket.wind) ?? 8,
+        avg(bucket.wind || []) ?? 8,
 
       rh:
-        avg(bucket.rh) ?? 70,
+        avg(bucket.rh || []) ?? 70,
 
       // --------------------------------------------
       // FIXED SOLAR
+      // Today uses completed/current hourly average.
+      // Historical uses hourly avg when available,
+      // otherwise daily solar sum conversion.
       // --------------------------------------------
       solarWm2:
-        avg(bucket.solar) ??
+        avg(bucket.solar || []) ??
         mjToAvgWatts(
           d.shortwave_radiation_sum[i]
         ),
 
       et0In:
-        Number(
-          d.et0_fao_evapotranspiration[i]
-        ) || 0,
+        isToday
+          ? sum(bucket.et0 || [])
+          : Number(
+              d.et0_fao_evapotranspiration[i]
+            ) || 0,
 
       // --------------------------------------------
       // SOIL
       // --------------------------------------------
       sm010:
-        avg(bucket.sm),
+        avg(bucket.sm || []),
 
       st010:
-        avg(bucket.st),
+        avg(bucket.st || []),
 
       // --------------------------------------------
       // NEW
       // --------------------------------------------
       vpdKpa:
-        avg(bucket.vpd),
+        avg(bucket.vpd || []),
 
       cloudPct:
-        avg(bucket.cloud)
+        avg(bucket.cloud || []),
+
+      // --------------------------------------------
+      // DEBUG / TRANSPARENCY
+      // --------------------------------------------
+      isTodayLive:
+        isToday,
+
+      hoursCount:
+        Number(bucket.hoursCount || 0)
     });
   }
 
   // --------------------------------------------
   // BUILD HOURLY TODAY
+  // Save full today hourly set, but flag future hours.
   // --------------------------------------------
   const hourlyToday = [];
 
@@ -293,8 +412,12 @@ async function fetchWeather(lat, lng) {
 
     if (dateISO !== todayISO) continue;
 
+    const isFutureHour = t > currentHourISO;
+
     hourlyToday.push({
       timeISO: t,
+
+      isFutureHour,
 
       tempF:
         Number(h.temperature_2m[i]) || 0,
@@ -386,10 +509,10 @@ async function fetchWeather(lat, lng) {
         ) / 2,
 
       windMph:
-        avg(bucket.wind) ?? 8,
+        avg(bucket.wind || []) ?? 8,
 
       rh:
-        avg(bucket.rh) ?? 70,
+        avg(bucket.rh || []) ?? 70,
 
       solarWm2:
         mjToAvgWatts(
@@ -405,10 +528,10 @@ async function fetchWeather(lat, lng) {
       // NEW
       // --------------------------------------------
       vpdKpa:
-        avg(bucket.vpd),
+        avg(bucket.vpd || []),
 
       cloudPct:
-        avg(bucket.cloud)
+        avg(bucket.cloud || [])
     });
   }
 
@@ -422,12 +545,16 @@ async function fetchWeather(lat, lng) {
 
     meta: {
       todayISO,
+      currentHourISO,
 
       histDays:
         dailySeries.length,
 
       fcstDays:
-        dailyForecast.length
+        dailyForecast.length,
+
+      todayIncludedInDailySeries:
+        true
     }
   };
 }
