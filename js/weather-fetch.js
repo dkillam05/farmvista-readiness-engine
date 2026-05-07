@@ -3,6 +3,10 @@
 // PURPOSE:
 // Fetch Open-Meteo weather (history + today hourly + forecast)
 // WITH DAILY SOIL AGGREGATION (sm010 + st010)
+// FIXED:
+// ✅ Added VPD
+// ✅ Added cloud cover
+// ✅ Removed double soil-temp conversion
 // ============================================
 
 const fetch = require("node-fetch");
@@ -10,10 +14,6 @@ const fetch = require("node-fetch");
 // --------------------------------------------
 // HELPERS
 // --------------------------------------------
-function cToF(c) {
-  return (c * 9) / 5 + 32;
-}
-
 function mmToIn(mm) {
   return mm / 25.4;
 }
@@ -63,7 +63,14 @@ async function fetchWeather(lat, lng) {
       "precipitation",
       "et0_fao_evapotranspiration",
       "soil_moisture_0_to_10cm",
-      "soil_temperature_0_to_10cm"
+      "soil_temperature_0_to_10cm",
+
+      // --------------------------------------------
+      // NEW
+      // --------------------------------------------
+      "vapour_pressure_deficit",
+      "cloud_cover"
+
     ].join(",") +
     `&daily=` +
     [
@@ -100,7 +107,13 @@ async function fetchWeather(lat, lng) {
         st: [],
         wind: [],
         rh: [],
-        solar: []
+        solar: [],
+
+        // --------------------------------------------
+        // NEW
+        // --------------------------------------------
+        vpd: [],
+        cloud: []
       };
     }
 
@@ -121,6 +134,8 @@ async function fetchWeather(lat, lng) {
 
     // --------------------------------------------
     // SOIL TEMP
+    // FIXED:
+    // Open-Meteo already returning Fahrenheit
     // --------------------------------------------
     if (
       Number.isFinite(
@@ -128,9 +143,7 @@ async function fetchWeather(lat, lng) {
       )
     ) {
       bucket.st.push(
-        cToF(
-          h.soil_temperature_0_to_10cm[i]
-        )
+        h.soil_temperature_0_to_10cm[i]
       );
     }
 
@@ -170,6 +183,32 @@ async function fetchWeather(lat, lng) {
     ) {
       bucket.solar.push(
         h.shortwave_radiation[i]
+      );
+    }
+
+    // --------------------------------------------
+    // VPD
+    // --------------------------------------------
+    if (
+      Number.isFinite(
+        h.vapour_pressure_deficit[i]
+      )
+    ) {
+      bucket.vpd.push(
+        h.vapour_pressure_deficit[i]
+      );
+    }
+
+    // --------------------------------------------
+    // CLOUD COVER
+    // --------------------------------------------
+    if (
+      Number.isFinite(
+        h.cloud_cover[i]
+      )
+    ) {
+      bucket.cloud.push(
+        h.cloud_cover[i]
       );
     }
   }
@@ -230,7 +269,16 @@ async function fetchWeather(lat, lng) {
         avg(bucket.sm),
 
       st010:
-        avg(bucket.st)
+        avg(bucket.st),
+
+      // --------------------------------------------
+      // NEW
+      // --------------------------------------------
+      vpdKpa:
+        avg(bucket.vpd),
+
+      cloudPct:
+        avg(bucket.cloud)
     });
   }
 
@@ -282,13 +330,32 @@ async function fetchWeather(lat, lng) {
           ? h.soil_moisture_0_to_10cm[i]
           : null,
 
+      // --------------------------------------------
+      // FIXED:
+      // remove cToF double conversion
+      // --------------------------------------------
       st010:
         Number.isFinite(
           h.soil_temperature_0_to_10cm[i]
         )
-          ? cToF(
-              h.soil_temperature_0_to_10cm[i]
-            )
+          ? h.soil_temperature_0_to_10cm[i]
+          : null,
+
+      // --------------------------------------------
+      // NEW
+      // --------------------------------------------
+      vpdKpa:
+        Number.isFinite(
+          h.vapour_pressure_deficit[i]
+        )
+          ? h.vapour_pressure_deficit[i]
+          : null,
+
+      cloudPct:
+        Number.isFinite(
+          h.cloud_cover[i]
+        )
+          ? h.cloud_cover[i]
           : null
     });
   }
@@ -303,6 +370,9 @@ async function fetchWeather(lat, lng) {
 
     if (dateISO <= todayISO) continue;
 
+    const bucket =
+      dailyBuckets[dateISO] || {};
+
     dailyForecast.push({
       dateISO,
 
@@ -315,9 +385,11 @@ async function fetchWeather(lat, lng) {
           (Number(d.temperature_2m_min[i]) || 0)
         ) / 2,
 
-      windMph: 8,
+      windMph:
+        avg(bucket.wind) ?? 8,
 
-      rh: 70,
+      rh:
+        avg(bucket.rh) ?? 70,
 
       solarWm2:
         mjToAvgWatts(
@@ -327,7 +399,16 @@ async function fetchWeather(lat, lng) {
       et0In:
         Number(
           d.et0_fao_evapotranspiration[i]
-        ) || 0
+        ) || 0,
+
+      // --------------------------------------------
+      // NEW
+      // --------------------------------------------
+      vpdKpa:
+        avg(bucket.vpd),
+
+      cloudPct:
+        avg(bucket.cloud)
     });
   }
 
@@ -341,6 +422,7 @@ async function fetchWeather(lat, lng) {
 
     meta: {
       todayISO,
+
       histDays:
         dailySeries.length,
 
