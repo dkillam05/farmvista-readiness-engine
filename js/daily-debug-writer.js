@@ -121,28 +121,28 @@ async function writeDailyDebug({
       cloudN: safeNum(row.cloudN)
     };
 
-    const dryPwrBreakdown = {
-      temp: safeNum(row.temp ?? row.tempF),
-      tempN: safeNum(row.tempN),
+const dryPwrBreakdown = {
+  temp: safeNum(t.temp ?? row.tempF),
+  tempN: safeNum(t.tempN),
 
-      wind: safeNum(row.wind ?? row.windMph),
-      windN: safeNum(row.windN),
+  wind: safeNum(t.wind ?? row.windMph),
+  windN: safeNum(t.windN),
 
-      rh: safeNum(row.rh),
-      rhN: safeNum(row.rhN),
+  rh: safeNum(t.rh ?? row.rh),
+  rhN: safeNum(t.rhN),
 
-      solar: safeNum(row.solar ?? row.solarWm2),
-      solarN: safeNum(row.solarN),
+  solar: safeNum(t.solar ?? row.solarWm2),
+  solarN: safeNum(t.solarN),
 
-      vpd: safeNum(row.vpd),
-      vpdN: safeNum(row.vpdN),
+  vpd: safeNum(t.vpd),
+  vpdN: safeNum(t.vpdN),
 
-      cloud: safeNum(row.cloud),
-      cloudN: safeNum(row.cloudN),
+  cloud: safeNum(t.cloud),
+  cloudN: safeNum(t.cloudN),
 
-      raw: safeNum(row.raw ?? row.dryRaw),
-      dryPwr: safeNum(t.dryPwr ?? row.dryPwr)
-    };
+  raw: safeNum(t.raw),
+  dryPwr: safeNum(t.dryPwr ?? row.dryPwr)
+};
 
     const modelTrace = {
       storage: safeNum(t.storage),
