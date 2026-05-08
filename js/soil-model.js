@@ -3,6 +3,7 @@
 // PURPOSE:
 // FULL model loop (WITH SEED SUPPORT)
 // Dynamic infiltration wired in
+// Partial-day drydown scaling for live today row
 // ============================================
 
 const { calcDryingPower } = require("./drying-power");
@@ -18,9 +19,6 @@ const {
   surfaceDrivenStorageFloor
 } = require("./surface-model");
 
-// --------------------------------------------
-// HELPERS
-// --------------------------------------------
 function clamp(n, lo, hi) {
   n = Number(n);
   if (!Number.isFinite(n)) return lo;
@@ -32,14 +30,18 @@ function round(v, d = 2) {
   return Math.round(Number(v) * p) / p;
 }
 
-// --------------------------------------------
-// CONSTANTS
-// --------------------------------------------
+function getDayFraction(row) {
+  if (!row || row.isTodayLive !== true) return 1;
+
+  const hours = Number(row.hoursCount || 0);
+
+  if (!Number.isFinite(hours) || hours <= 0) return 0.05;
+
+  return clamp(hours / 24, 0.05, 1);
+}
+
 const LOSS_SCALE = 0.55;
 
-// --------------------------------------------
-// MAIN MODEL
-// --------------------------------------------
 function runSoilModel(weatherRows, field, opts = {}) {
   if (!Array.isArray(weatherRows) || !weatherRows.length) {
     return null;
@@ -56,9 +58,6 @@ function runSoilModel(weatherRows, field, opts = {}) {
     last?.sm010
   );
 
-  // --------------------------------------------
-  // SEED LOGIC
-  // --------------------------------------------
   const seed = opts.seed || {};
 
   let storage;
@@ -78,11 +77,9 @@ function runSoilModel(weatherRows, field, opts = {}) {
 
   const trace = [];
 
-  // --------------------------------------------
-  // LOOP DAYS
-  // --------------------------------------------
   for (const row of weatherRows) {
     const before = storage;
+    const dayFraction = getDayFraction(row);
 
     const dry = calcDryingPower(row);
 
@@ -92,11 +89,6 @@ function runSoilModel(weatherRows, field, opts = {}) {
       0
     );
 
-    // --------------------------------------------
-    // DYNAMIC INFILTRATION
-    // Based on current soil storage, surface wetness,
-    // rain amount, soil type, and drainage class.
-    // --------------------------------------------
     const infil = dynamicInfiltration({
       storage: before,
       surface,
@@ -104,11 +96,6 @@ function runSoilModel(weatherRows, field, opts = {}) {
       factors
     });
 
-    // --------------------------------------------
-    // SURFACE ADD
-    // More runoff/surface holding when infiltration is poor.
-    // Less surface holding when dry soil can absorb.
-    // --------------------------------------------
     const rawSurfaceAdd =
       surfaceStorageAddFromRain(rain);
 
@@ -122,9 +109,6 @@ function runSoilModel(weatherRows, field, opts = {}) {
 
     surface += surfaceAdd;
 
-    // --------------------------------------------
-    // EFFECTIVE RAIN
-    // --------------------------------------------
     let rainEff = effectiveRainInches(
       rain,
       before,
@@ -135,11 +119,6 @@ function runSoilModel(weatherRows, field, opts = {}) {
     const addRain =
       rainEff * infil.infilMult;
 
-    // --------------------------------------------
-    // SURFACE → SOIL
-    // Dry/open soils hand off surface water better.
-    // Saturated/ponded soils hand off slower.
-    // --------------------------------------------
     const handoffFracBase =
       surfaceToStorageFrac(row);
 
@@ -159,9 +138,6 @@ function runSoilModel(weatherRows, field, opts = {}) {
     const add =
       addRain + surfaceToSoil;
 
-    // --------------------------------------------
-    // DRYING LOSS
-    // --------------------------------------------
     let loss =
       Number(dry.dryPwr || 0) *
       LOSS_SCALE *
@@ -172,17 +148,22 @@ function runSoilModel(weatherRows, field, opts = {}) {
 
     loss *= surfaceDryMult;
 
+    // ✅ Important fix:
+    // Today's live row is only a partial day, so don't apply
+    // a full 24-hour drydown to 12-18 hours of data.
+    loss *= dayFraction;
+
     let after =
       before + add - loss;
 
-    // --------------------------------------------
-    // SURFACE DRYDOWN
-    // --------------------------------------------
-    const surfaceLoss =
+    let surfaceLoss =
       surfaceDrydownInchesPerDay(
         dry,
         row.et0N || row.et0In || 0
       );
+
+    // ✅ Same partial-day scaling for surface drydown.
+    surfaceLoss *= dayFraction;
 
     surface -= surfaceLoss;
 
@@ -214,7 +195,6 @@ function runSoilModel(weatherRows, field, opts = {}) {
       rain: round(rain, 4),
       rainEff: round(rainEff, 4),
 
-      // Dynamic infiltration shown in grid
       infilMult: round(infil.infilMult, 4),
       runoffFrac: round(infil.runoffFrac, 4),
       saturation: round(infil.saturation, 4),
@@ -231,6 +211,10 @@ function runSoilModel(weatherRows, field, opts = {}) {
 
       loss: round(loss, 4),
       surfaceLoss: round(surfaceLoss, 4),
+
+      dayFraction: round(dayFraction, 4),
+      isTodayLive: row.isTodayLive === true,
+      hoursCount: Number(row.hoursCount || 0),
 
       dryPwr: round(dry.dryPwr, 4),
 
@@ -260,14 +244,10 @@ function runSoilModel(weatherRows, field, opts = {}) {
 
   return {
     trace,
-
     storageFinal: storage,
     surfaceFinal: surface,
-
     factors,
-
-    seedMode:
-      seed.mode || "baseline_30d"
+    seedMode: seed.mode || "baseline_30d"
   };
 }
 
