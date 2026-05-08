@@ -3,6 +3,12 @@
 // PURPOSE:
 // Save exact readiness math inputs + outputs
 // into field_conditions_current daily subcollection
+//
+// UPDATED:
+// ✅ Preserve FULL dynamic infiltration trace
+// ✅ Preserve live intraday scaling values
+// ✅ Preserve runoff/saturation diagnostics
+// ✅ Keep debug docs aligned with live model
 // ============================================
 
 const admin = require("firebase-admin");
@@ -12,30 +18,50 @@ const admin = require("firebase-admin");
 // --------------------------------------------
 function safeNum(v, fallback = null) {
   const n = Number(v);
-  return Number.isFinite(n) ? n : fallback;
+
+  return Number.isFinite(n)
+    ? n
+    : fallback;
 }
 
 function safeStr(v, fallback = null) {
-  if (v === undefined || v === null) return fallback;
+  if (
+    v === undefined ||
+    v === null
+  ) {
+    return fallback;
+  }
+
   const s = String(v);
-  return s ? s : fallback;
+
+  return s
+    ? s
+    : fallback;
 }
 
 function todayISO() {
-  return new Date().toISOString().slice(0, 10);
+  return new Date()
+    .toISOString()
+    .slice(0, 10);
 }
 
 function toISODate(v) {
   if (!v) return null;
+
   return String(v).slice(0, 10);
 }
 
 function buildTraceMap(trace) {
   const map = new Map();
 
-  for (const t of Array.isArray(trace) ? trace : []) {
-    const iso = toISODate(t?.dateISO);
+  for (const t of Array.isArray(trace)
+    ? trace
+    : []) {
+    const iso =
+      toISODate(t?.dateISO);
+
     if (!iso) continue;
+
     map.set(iso, t);
   }
 
@@ -52,21 +78,43 @@ async function writeDailyDebug({
   wxDoc,
   mrmsDoc
 }) {
-  if (!db || !field || !result) {
+  if (
+    !db ||
+    !field ||
+    !result
+  ) {
     return;
   }
 
   const fieldId = field.id;
-  const fieldName = field.name || null;
-  const nowISO = new Date().toISOString();
-  const today = todayISO();
 
-  const rows = Array.isArray(result.rows) ? result.rows : [];
-  const trace = Array.isArray(result.trace) ? result.trace : [];
-  const traceMap = buildTraceMap(trace);
+  const fieldName =
+    field.name || null;
+
+  const nowISO =
+    new Date().toISOString();
+
+  const today =
+    todayISO();
+
+  const rows =
+    Array.isArray(result.rows)
+      ? result.rows
+      : [];
+
+  const trace =
+    Array.isArray(result.trace)
+      ? result.trace
+      : [];
+
+  const traceMap =
+    buildTraceMap(trace);
 
   if (!rows.length) {
-    console.log(`🧠 No debug rows to save for ${fieldName || fieldId}`);
+    console.log(
+      `🧠 No debug rows to save for ${fieldName || fieldId}`
+    );
+
     return;
   }
 
@@ -76,92 +124,284 @@ async function writeDailyDebug({
     .collection("daily");
 
   const batch = db.batch();
+
   let writes = 0;
 
+  // --------------------------------------------
+  // LOOP DAYS
+  // --------------------------------------------
   for (const row of rows) {
-    const dateISO = toISODate(row?.dateISO);
+    const dateISO =
+      toISODate(row?.dateISO);
+
     if (!dateISO) continue;
 
-    const t = traceMap.get(dateISO) || {};
-    const isForecast = dateISO > today;
+    const t =
+      traceMap.get(dateISO) || {};
 
-    const rainOpenMeteoIn = safeNum(
-      row.rainOpenMeteoIn ?? row.rainIn ?? 0,
-      0
-    );
+    const isForecast =
+      dateISO > today;
 
-    const rainMrmsIn = safeNum(row.rainMrmsIn, null);
+    // --------------------------------------------
+    // RAIN SOURCE
+    // --------------------------------------------
+    const rainOpenMeteoIn =
+      safeNum(
+        row.rainOpenMeteoIn ??
+          row.rainIn ??
+          0,
+        0
+      );
 
-    let rainUsedInMath = rainOpenMeteoIn;
-    let rainSource = isForecast ? "open-meteo-forecast" : "missing-mrms";
+    const rainMrmsIn =
+      safeNum(
+        row.rainMrmsIn,
+        null
+      );
 
-    if (!isForecast && Number.isFinite(rainMrmsIn)) {
-      rainUsedInMath = rainMrmsIn;
+    let rainUsedInMath =
+      rainOpenMeteoIn;
+
+    let rainSource =
+      isForecast
+        ? "open-meteo-forecast"
+        : "missing-mrms";
+
+    if (
+      !isForecast &&
+      Number.isFinite(rainMrmsIn)
+    ) {
+      rainUsedInMath =
+        rainMrmsIn;
+
       rainSource = "mrms";
     }
 
+    // --------------------------------------------
+    // WEATHER
+    // --------------------------------------------
     const dailyWeather = {
       rainSource,
+
       rainUsedInMath,
+
       rainMrmsIn,
       rainOpenMeteoIn,
 
-      tempF: safeNum(row.tempF),
-      windMph: safeNum(row.windMph),
-      rh: safeNum(row.rh),
-      solarWm2: safeNum(row.solarWm2),
+      tempF:
+        safeNum(row.tempF),
 
-      et0In: safeNum(row.et0In),
-      sm010: safeNum(row.sm010),
-      st010: safeNum(row.st010),
+      windMph:
+        safeNum(row.windMph),
 
-      vpd: safeNum(row.vpd),
-      vpdN: safeNum(row.vpdN),
-      cloud: safeNum(row.cloud),
-      cloudN: safeNum(row.cloudN)
+      rh:
+        safeNum(row.rh),
+
+      solarWm2:
+        safeNum(row.solarWm2),
+
+      et0In:
+        safeNum(row.et0In),
+
+      sm010:
+        safeNum(row.sm010),
+
+      st010:
+        safeNum(row.st010),
+
+      vpd:
+        safeNum(
+          row.vpd ??
+            row.vpdKpa
+        ),
+
+      vpdN:
+        safeNum(row.vpdN),
+
+      cloud:
+        safeNum(
+          row.cloud ??
+            row.cloudPct
+        ),
+
+      cloudN:
+        safeNum(row.cloudN)
     };
 
-const dryPwrBreakdown = {
-  temp: safeNum(t.temp ?? row.tempF),
-  tempN: safeNum(t.tempN),
+    // --------------------------------------------
+    // DRYING POWER BREAKDOWN
+    // --------------------------------------------
+    const dryPwrBreakdown = {
+      temp:
+        safeNum(
+          t.temp ??
+            row.tempF
+        ),
 
-  wind: safeNum(t.wind ?? row.windMph),
-  windN: safeNum(t.windN),
+      tempN:
+        safeNum(t.tempN),
 
-  rh: safeNum(t.rh ?? row.rh),
-  rhN: safeNum(t.rhN),
+      wind:
+        safeNum(
+          t.wind ??
+            row.windMph
+        ),
 
-  solar: safeNum(t.solar ?? row.solarWm2),
-  solarN: safeNum(t.solarN),
+      windN:
+        safeNum(t.windN),
 
-  vpd: safeNum(t.vpd),
-  vpdN: safeNum(t.vpdN),
+      rh:
+        safeNum(
+          t.rh ??
+            row.rh
+        ),
 
-  cloud: safeNum(t.cloud),
-  cloudN: safeNum(t.cloudN),
+      rhN:
+        safeNum(t.rhN),
 
-  raw: safeNum(t.raw),
-  dryPwr: safeNum(t.dryPwr ?? row.dryPwr)
-};
+      solar:
+        safeNum(
+          t.solar ??
+            row.solarWm2
+        ),
 
+      solarN:
+        safeNum(t.solarN),
+
+      vpd:
+        safeNum(t.vpd),
+
+      vpdN:
+        safeNum(t.vpdN),
+
+      cloud:
+        safeNum(t.cloud),
+
+      cloudN:
+        safeNum(t.cloudN),
+
+      raw:
+        safeNum(t.raw),
+
+      dryPwr:
+        safeNum(
+          t.dryPwr ??
+            row.dryPwr
+        )
+    };
+
+    // --------------------------------------------
+    // MODEL TRACE
+    // FULL DYNAMIC TRACE
+    // --------------------------------------------
     const modelTrace = {
-      storage: safeNum(t.storage),
-      surface: safeNum(t.surface),
+      // --------------------------------------------
+      // STORAGE
+      // --------------------------------------------
+      storage:
+        safeNum(t.storage),
 
-      rain: safeNum(t.rain ?? rainUsedInMath),
-      rainEff: safeNum(t.rainEff),
+      surface:
+        safeNum(t.surface),
 
-      addRain: safeNum(t.addRain),
-      surfaceAdd: safeNum(t.surfaceAdd),
-      surfaceToSoil: safeNum(t.surfaceToSoil),
+      // --------------------------------------------
+      // RAIN
+      // --------------------------------------------
+      rain:
+        safeNum(
+          t.rain ??
+            rainUsedInMath
+        ),
 
-      loss: safeNum(t.loss),
-      surfaceLoss: safeNum(t.surfaceLoss),
+      rainEff:
+        safeNum(t.rainEff),
 
-      surfacePenalty: safeNum(t.surfacePenalty)
+      // --------------------------------------------
+      // DYNAMIC INFILTRATION
+      // --------------------------------------------
+      infilMult:
+        safeNum(t.infilMult),
+
+      runoffFrac:
+        safeNum(t.runoffFrac),
+
+      saturation:
+        safeNum(t.saturation),
+
+      dryBoost:
+        safeNum(t.dryBoost),
+
+      saturationCollapse:
+        safeNum(
+          t.saturationCollapse
+        ),
+
+      rainIntensityPenalty:
+        safeNum(
+          t.rainIntensityPenalty
+        ),
+
+      infilSurfacePenalty:
+        safeNum(
+          t.infilSurfacePenalty
+        ),
+
+      // --------------------------------------------
+      // WATER MOVEMENT
+      // --------------------------------------------
+      addRain:
+        safeNum(t.addRain),
+
+      surfaceAdd:
+        safeNum(t.surfaceAdd),
+
+      rawSurfaceAdd:
+        safeNum(t.rawSurfaceAdd),
+
+      surfaceToSoil:
+        safeNum(
+          t.surfaceToSoil
+        ),
+
+      // --------------------------------------------
+      // DRYING
+      // --------------------------------------------
+      loss:
+        safeNum(t.loss),
+
+      surfaceLoss:
+        safeNum(t.surfaceLoss),
+
+      // --------------------------------------------
+      // LIVE DAY SCALING
+      // --------------------------------------------
+      dayFraction:
+        safeNum(
+          t.dayFraction
+        ),
+
+      isTodayLive:
+        t.isTodayLive === true,
+
+      hoursCount:
+        safeNum(
+          t.hoursCount
+        ),
+
+      // --------------------------------------------
+      // FINAL PENALTY
+      // --------------------------------------------
+      surfacePenalty:
+        safeNum(
+          t.surfacePenalty
+        )
     };
 
-    const docRef = dailyRef.doc(dateISO);
+    // --------------------------------------------
+    // WRITE DOC
+    // --------------------------------------------
+    const docRef =
+      dailyRef.doc(dateISO);
 
     batch.set(
       docRef,
@@ -171,33 +411,78 @@ const dryPwrBreakdown = {
 
         dateISO,
 
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        updatedAtISO: nowISO,
+        updatedAt:
+          admin.firestore.FieldValue.serverTimestamp(),
 
-        weather: dailyWeather,
+        updatedAtISO:
+          nowISO,
+
+        weather:
+          dailyWeather,
+
         dryPwrBreakdown,
-        trace: modelTrace,
 
-        factors: result.factors || {},
+        trace:
+          modelTrace,
+
+        factors:
+          result.factors || {},
 
         final: {
-          readiness: safeNum(result.readiness),
-          wetness: safeNum(result.wetness),
-          baseReadiness: safeNum(result.baseReadiness),
-          surfacePenalty: safeNum(result.surfacePenalty),
+          readiness:
+            safeNum(
+              result.readiness
+            ),
 
-          storageFinal: safeNum(result.storageFinal),
-          storageForReadiness: safeNum(result.storageForReadiness),
-          surfaceFinal: safeNum(result.surfaceStorageFinal)
+          wetness:
+            safeNum(
+              result.wetness
+            ),
+
+          baseReadiness:
+            safeNum(
+              result.baseReadiness
+            ),
+
+          surfacePenalty:
+            safeNum(
+              result.surfacePenalty
+            ),
+
+          storageFinal:
+            safeNum(
+              result.storageFinal
+            ),
+
+          storageForReadiness:
+            safeNum(
+              result.storageForReadiness
+            ),
+
+          surfaceFinal:
+            safeNum(
+              result.surfaceStorageFinal
+            )
         },
 
         debug: {
-          source: "daily-debug-writer",
-          rainRule: isForecast
-            ? "forecast uses Open-Meteo rainfall"
-            : "history/today uses MRMS rainfall",
-          modelVersion: safeStr(result?.debug?.modelVersion),
-          seedMode: safeStr(result?.debug?.seedMode)
+          source:
+            "daily-debug-writer",
+
+          rainRule:
+            isForecast
+              ? "forecast uses Open-Meteo rainfall"
+              : "history/today uses MRMS rainfall",
+
+          modelVersion:
+            safeStr(
+              result?.debug?.modelVersion
+            ),
+
+          seedMode:
+            safeStr(
+              result?.debug?.seedMode
+            )
         }
       },
       { merge: true }
@@ -206,6 +491,9 @@ const dryPwrBreakdown = {
     writes++;
   }
 
+  // --------------------------------------------
+  // COMMIT
+  // --------------------------------------------
   if (writes > 0) {
     await batch.commit();
   }
