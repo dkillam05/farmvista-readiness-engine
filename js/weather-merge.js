@@ -4,12 +4,17 @@
 // Merge Open-Meteo weather + MRMS rainfall
 // into FINAL model-ready rows
 //
-// IMPORTANT RULES:
-// ✔ Historical rainfall = MRMS
-// ✔ Forecast rainfall = Open-Meteo
-// ✔ Preserve ALL weather fields
-// ✔ Do NOT reshape schema
-// ✔ Do NOT collapse rows
+// FIXED:
+// ✅ Properly merges:
+//    - dailySeries
+//    - dailyForecast
+//
+// ✅ Historical rainfall = MRMS
+// ✅ Forecast rainfall = Open-Meteo
+// ✅ Preserves ALL weather fields
+// ✅ Prevents duplicate date rows
+// ✅ Keeps rows sorted chronologically
+// ✅ Restores forecast rows into engine
 // ============================================
 
 // --------------------------------------------
@@ -21,21 +26,28 @@ function mmToIn(mm) {
 
 function toISODate(str) {
   if (!str) return null;
+
   return String(str).slice(0, 10);
 }
 
 function toISOHour(str) {
   if (!str) return null;
+
   return String(str).slice(0, 13);
 }
 
 function safeNum(v, fallback = 0) {
   const n = Number(v);
-  return Number.isFinite(n) ? n : fallback;
+
+  return Number.isFinite(n)
+    ? n
+    : fallback;
 }
 
 function getTodayISO() {
-  return new Date().toISOString().slice(0, 10);
+  return new Date()
+    .toISOString()
+    .slice(0, 10);
 }
 
 // --------------------------------------------
@@ -94,62 +106,143 @@ function buildMrmsHourlyMap(mrmsDoc) {
 }
 
 // --------------------------------------------
-// DAILY MERGE
+// BUILD COMBINED DAILY ROWS
+// IMPORTANT FIX
 // --------------------------------------------
-function mergeDaily(wx, mrmsDoc) {
-  const baseRows = Array.isArray(wx?.dailySeries)
+function buildCombinedDailyRows(wx) {
+
+  const historyRows = Array.isArray(
+    wx?.dailySeries
+  )
     ? wx.dailySeries
     : [];
 
-  const mrmsDaily = buildMrmsDailyMap(mrmsDoc);
+  const forecastRows = Array.isArray(
+    wx?.dailyForecast
+  )
+    ? wx.dailyForecast
+    : [];
 
-  const todayISO = getTodayISO();
+  // --------------------------------------------
+  // Combine BOTH arrays
+  // --------------------------------------------
+  const combined = [
+    ...historyRows,
+    ...forecastRows
+  ];
+
+  // --------------------------------------------
+  // Deduplicate by date
+  // (today row should come from dailySeries)
+  // --------------------------------------------
+  const map = new Map();
+
+  for (const row of combined) {
+    const iso = toISODate(row?.dateISO);
+
+    if (!iso) continue;
+
+    // Prefer dailySeries version
+    if (!map.has(iso)) {
+      map.set(iso, {
+        ...row,
+        dateISO: iso
+      });
+    }
+  }
+
+  // --------------------------------------------
+  // Sort chronologically
+  // --------------------------------------------
+  return Array.from(map.values())
+    .sort((a, b) =>
+      String(a.dateISO).localeCompare(
+        String(b.dateISO)
+      )
+    );
+}
+
+// --------------------------------------------
+// DAILY MERGE
+// --------------------------------------------
+function mergeDaily(wx, mrmsDoc) {
+
+  // --------------------------------------------
+  // IMPORTANT FIX:
+  // Use BOTH history + forecast
+  // --------------------------------------------
+  const baseRows =
+    buildCombinedDailyRows(wx);
+
+  const mrmsDaily =
+    buildMrmsDailyMap(mrmsDoc);
+
+  const todayISO =
+    getTodayISO();
 
   return baseRows.map((r) => {
-    const iso = toISODate(r?.dateISO);
 
-    const isForecast = iso > todayISO;
+    const iso =
+      toISODate(r?.dateISO);
 
-    const mrms = mrmsDaily.get(iso);
+    const isForecast =
+      iso > todayISO;
+
+    const mrms =
+      mrmsDaily.get(iso);
 
     // --------------------------------------------
-    // RAINFALL SOURCE LOGIC
+    // DEFAULTS
     // --------------------------------------------
-    let rainIn = safeNum(r?.rainIn);
+    let rainIn =
+      safeNum(r?.rainIn);
 
-    let rainSource = "open-meteo";
+    let rainSource =
+      "open-meteo";
 
-    let rainMrmsIn = null;
+    let rainMrmsIn =
+      null;
 
-    let rainOpenMeteoIn = safeNum(r?.rainIn);
+    let rainOpenMeteoIn =
+      safeNum(r?.rainIn);
 
-    // Historical + today = MRMS
+    // --------------------------------------------
+    // HISTORY + TODAY
+    // Use MRMS
+    // --------------------------------------------
     if (!isForecast && mrms) {
-      rainIn = safeNum(mrms.rainIn);
 
-      rainMrmsIn = safeNum(mrms.rainIn);
+      rainIn =
+        safeNum(mrms.rainIn);
 
-      rainSource = "mrms";
-    }
+      rainMrmsIn =
+        safeNum(mrms.rainIn);
 
-    // Forecast = Open-Meteo
-    if (isForecast) {
-      rainSource = "open-meteo-forecast";
+      rainSource =
+        "mrms";
     }
 
     // --------------------------------------------
-    // IMPORTANT:
-    // preserve ALL original fields
+    // FORECAST
+    // Keep Open-Meteo
+    // --------------------------------------------
+    if (isForecast) {
+      rainSource =
+        "open-meteo-forecast";
+    }
+
+    // --------------------------------------------
+    // Preserve ALL fields
     // --------------------------------------------
     return {
       ...r,
 
       dateISO: iso,
 
-      // FINAL rain used by model
+      // Final rainfall used by model
       rainIn,
 
-      // DEBUG / TRANSPARENCY
+      // Transparency/debug
       rainMrmsIn,
       rainOpenMeteoIn,
 
@@ -162,42 +255,58 @@ function mergeDaily(wx, mrmsDoc) {
 // HOURLY MERGE
 // --------------------------------------------
 function mergeHourly(wx, mrmsDoc) {
-  const baseRows = Array.isArray(wx?.hourlyToday)
+
+  const baseRows = Array.isArray(
+    wx?.hourlyToday
+  )
     ? wx.hourlyToday
     : [];
 
-  const mrmsHourly = buildMrmsHourlyMap(mrmsDoc);
+  const mrmsHourly =
+    buildMrmsHourlyMap(mrmsDoc);
 
   return baseRows.map((r) => {
-    const isoHour = toISOHour(
-      r?.timeISO || r?.time
-    );
 
-    const mrms = mrmsHourly.get(isoHour);
+    const isoHour =
+      toISOHour(
+        r?.timeISO || r?.time
+      );
 
-    let rainIn = safeNum(r?.rainIn);
+    const mrms =
+      mrmsHourly.get(isoHour);
 
-    let rainSource = "open-meteo";
+    let rainIn =
+      safeNum(r?.rainIn);
 
-    let rainMrmsIn = null;
+    let rainSource =
+      "open-meteo";
 
-    let rainOpenMeteoIn = safeNum(r?.rainIn);
+    let rainMrmsIn =
+      null;
+
+    let rainOpenMeteoIn =
+      safeNum(r?.rainIn);
 
     // --------------------------------------------
-    // USE MRMS FOR CURRENT DAY HOURLY
+    // Use MRMS for today hourly
     // --------------------------------------------
     if (mrms) {
-      rainIn = safeNum(mrms.rainIn);
 
-      rainMrmsIn = safeNum(mrms.rainIn);
+      rainIn =
+        safeNum(mrms.rainIn);
 
-      rainSource = "mrms-hourly";
+      rainMrmsIn =
+        safeNum(mrms.rainIn);
+
+      rainSource =
+        "mrms-hourly";
     }
 
     return {
       ...r,
 
-      timeISO: r?.timeISO || null,
+      timeISO:
+        r?.timeISO || null,
 
       rainIn,
 
@@ -213,9 +322,12 @@ function mergeHourly(wx, mrmsDoc) {
 // MAIN MERGE
 // --------------------------------------------
 function mergeWeather(wx, mrmsDoc) {
-  const daily = mergeDaily(wx, mrmsDoc);
 
-  const hourly = mergeHourly(wx, mrmsDoc);
+  const daily =
+    mergeDaily(wx, mrmsDoc);
+
+  const hourly =
+    mergeHourly(wx, mrmsDoc);
 
   return {
     daily,
