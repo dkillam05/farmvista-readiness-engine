@@ -2,7 +2,20 @@
 // FILE: /js/engine.js
 // PURPOSE:
 // Tie weather + MRMS + field settings into
-// one final readiness result (WITH SEED LOGIC)
+// one final readiness result
+//
+// IMPORTANT CHANGE:
+// ✅ CURRENT readiness now ONLY uses:
+//    - historical rows
+//    - today's live row
+//
+// ❌ Forecast rows NO LONGER affect:
+//    - readiness
+//    - soil moisture
+//    - surface wetness
+//
+// Forecast rows should ONLY be used later
+// by ETA / future projection logic.
 // ============================================
 
 const { mergeWeather } = require("./weather-merge");
@@ -17,20 +30,62 @@ function round(v, d = 2) {
   return Math.round(Number(v) * p) / p;
 }
 
+function getTodayISO() {
+  return new Date().toISOString().slice(0, 10);
+}
+
 // --------------------------------------------
 // MAIN ENGINE
 // --------------------------------------------
 function runReadinessEngine(wxDoc, mrmsDoc, fieldDoc, opts = {}) {
+
+  // --------------------------------------------
+  // MERGE WEATHER
+  // --------------------------------------------
   const merged = mergeWeather(wxDoc, mrmsDoc);
 
-  const dailyRows = Array.isArray(merged.daily)
+  const allRows = Array.isArray(merged.daily)
     ? merged.daily
     : [];
 
-  if (!dailyRows.length) {
+  if (!allRows.length) {
     return {
       ok: false,
       error: "No weather rows available"
+    };
+  }
+
+  // --------------------------------------------
+  // IMPORTANT:
+  // CURRENT CONDITIONS ONLY
+  //
+  // Readiness must represent:
+  // "right now"
+  //
+  // NOT future forecast rain.
+  // --------------------------------------------
+  const todayISO = getTodayISO();
+
+  const currentRows = allRows.filter(r => {
+
+    const dateISO =
+      String(r?.dateISO || "");
+
+    if (!dateISO) {
+      return false;
+    }
+
+    // --------------------------------------------
+    // KEEP:
+    // historical + today
+    // --------------------------------------------
+    return dateISO <= todayISO;
+  });
+
+  if (!currentRows.length) {
+    return {
+      ok: false,
+      error: "No current weather rows available"
     };
   }
 
@@ -40,22 +95,28 @@ function runReadinessEngine(wxDoc, mrmsDoc, fieldDoc, opts = {}) {
   const seed = {
     mode: opts.seedMode || "baseline_30d",
 
-    // rolling values (if available)
-    storage: Number.isFinite(Number(opts.seedStorage))
-      ? Number(opts.seedStorage)
-      : null,
+    storage:
+      Number.isFinite(Number(opts.seedStorage))
+        ? Number(opts.seedStorage)
+        : null,
 
-    surface: Number.isFinite(Number(opts.seedSurface))
-      ? Number(opts.seedSurface)
-      : null
+    surface:
+      Number.isFinite(Number(opts.seedSurface))
+        ? Number(opts.seedSurface)
+        : null
   };
 
   // --------------------------------------------
-  // RUN MODEL (WITH SEED)
+  // RUN MODEL
+  // (CURRENT ROWS ONLY)
   // --------------------------------------------
-  const model = runSoilModel(dailyRows, fieldDoc, {
-    seed
-  });
+  const model = runSoilModel(
+    currentRows,
+    fieldDoc,
+    {
+      seed
+    }
+  );
 
   if (!model) {
     return {
@@ -67,9 +128,13 @@ function runReadinessEngine(wxDoc, mrmsDoc, fieldDoc, opts = {}) {
   // --------------------------------------------
   // READINESS
   // --------------------------------------------
-  const readiness = calculateReadiness(model, {
-    globalStorageMult: opts.globalStorageMult ?? 1.0
-  });
+  const readiness = calculateReadiness(
+    model,
+    {
+      globalStorageMult:
+        opts.globalStorageMult ?? 1.0
+    }
+  );
 
   if (!readiness) {
     return {
@@ -78,40 +143,95 @@ function runReadinessEngine(wxDoc, mrmsDoc, fieldDoc, opts = {}) {
     };
   }
 
+  // --------------------------------------------
+  // RETURN
+  // --------------------------------------------
   return {
     ok: true,
 
-    fieldId: fieldDoc?.id || fieldDoc?.fieldId || null,
-    fieldName: fieldDoc?.name || fieldDoc?.fieldName || null,
+    fieldId:
+      fieldDoc?.id ||
+      fieldDoc?.fieldId ||
+      null,
 
-    readiness: readiness.readinessR,
-    wetness: readiness.wetnessR,
-    baseReadiness: readiness.baseReadinessR,
-    surfacePenalty: readiness.surfacePenaltyR,
+    fieldName:
+      fieldDoc?.name ||
+      fieldDoc?.fieldName ||
+      null,
 
-    storageFinal: readiness.storageFinal,
-    surfaceStorageFinal: readiness.surfaceStorageFinal,
-    storageForReadiness: readiness.storageForReadiness,
-    readinessCreditIn: readiness.readinessCreditIn,
+    readiness:
+      readiness.readinessR,
 
-    factors: model.factors,
+    wetness:
+      readiness.wetnessR,
 
-    trace: model.trace,
-    rows: dailyRows,
+    baseReadiness:
+      readiness.baseReadinessR,
+
+    surfacePenalty:
+      readiness.surfacePenaltyR,
+
+    storageFinal:
+      readiness.storageFinal,
+
+    surfaceStorageFinal:
+      readiness.surfaceStorageFinal,
+
+    storageForReadiness:
+      readiness.storageForReadiness,
+
+    readinessCreditIn:
+      readiness.readinessCreditIn,
+
+    factors:
+      model.factors,
+
+    trace:
+      model.trace,
 
     // --------------------------------------------
-    // DEBUG (IMPORTANT FOR YOU)
+    // IMPORTANT:
+    // return ONLY current rows
+    // --------------------------------------------
+    rows:
+      currentRows,
+
+    // --------------------------------------------
+    // DEBUG
     // --------------------------------------------
     debug: {
-      seedMode: seed.mode,
-      seedStorage: seed.storage,
-      seedSurface: seed.surface,
 
-      globalStorageMultApplied: readiness.globalStorageMultApplied,
-      Smax: readiness.Smax,
+      seedMode:
+        seed.mode,
 
-      source: "FarmVista modular readiness engine",
-      modelVersion: "2026-05-seed-enabled"
+      seedStorage:
+        seed.storage,
+
+      seedSurface:
+        seed.surface,
+
+      globalStorageMultApplied:
+        readiness.globalStorageMultApplied,
+
+      Smax:
+        readiness.Smax,
+
+      totalRows:
+        allRows.length,
+
+      currentRows:
+        currentRows.length,
+
+      forecastRowsFiltered:
+        allRows.length - currentRows.length,
+
+      todayISO,
+
+      source:
+        "FarmVista modular readiness engine",
+
+      modelVersion:
+        "2026-05-current-only-live-readiness"
     }
   };
 }
