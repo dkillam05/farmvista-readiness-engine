@@ -9,6 +9,7 @@
 // ✅ Preserve live intraday scaling values
 // ✅ Preserve runoff/saturation diagnostics
 // ✅ Keep debug docs aligned with live model
+// ✅ Added ETA diagnostics support
 // ============================================
 
 const admin = require("firebase-admin");
@@ -57,6 +58,7 @@ function buildTraceMap(trace) {
   for (const t of Array.isArray(trace)
     ? trace
     : []) {
+
     const iso =
       toISODate(t?.dateISO);
 
@@ -78,6 +80,7 @@ async function writeDailyDebug({
   wxDoc,
   mrmsDoc
 }) {
+
   if (
     !db ||
     !field ||
@@ -111,12 +114,19 @@ async function writeDailyDebug({
     buildTraceMap(trace);
 
   if (!rows.length) {
+
     console.log(
       `🧠 No debug rows to save for ${fieldName || fieldId}`
     );
 
     return;
   }
+
+  // --------------------------------------------
+  // ETA DEBUG
+  // --------------------------------------------
+  const eta =
+    result?.eta || {};
 
   const dailyRef = db
     .collection("field_conditions_current")
@@ -131,6 +141,7 @@ async function writeDailyDebug({
   // LOOP DAYS
   // --------------------------------------------
   for (const row of rows) {
+
     const dateISO =
       toISODate(row?.dateISO);
 
@@ -171,6 +182,7 @@ async function writeDailyDebug({
       !isForecast &&
       Number.isFinite(rainMrmsIn)
     ) {
+
       rainUsedInMath =
         rainMrmsIn;
 
@@ -181,6 +193,7 @@ async function writeDailyDebug({
     // WEATHER
     // --------------------------------------------
     const dailyWeather = {
+
       rainSource,
 
       rainUsedInMath,
@@ -232,6 +245,7 @@ async function writeDailyDebug({
     // DRYING POWER BREAKDOWN
     // --------------------------------------------
     const dryPwrBreakdown = {
+
       temp:
         safeNum(
           t.temp ??
@@ -292,21 +306,17 @@ async function writeDailyDebug({
 
     // --------------------------------------------
     // MODEL TRACE
-    // FULL DYNAMIC TRACE
     // --------------------------------------------
     const modelTrace = {
-      // --------------------------------------------
+
       // STORAGE
-      // --------------------------------------------
       storage:
         safeNum(t.storage),
 
       surface:
         safeNum(t.surface),
 
-      // --------------------------------------------
       // RAIN
-      // --------------------------------------------
       rain:
         safeNum(
           t.rain ??
@@ -316,9 +326,7 @@ async function writeDailyDebug({
       rainEff:
         safeNum(t.rainEff),
 
-      // --------------------------------------------
       // DYNAMIC INFILTRATION
-      // --------------------------------------------
       infilMult:
         safeNum(t.infilMult),
 
@@ -346,9 +354,7 @@ async function writeDailyDebug({
           t.infilSurfacePenalty
         ),
 
-      // --------------------------------------------
       // WATER MOVEMENT
-      // --------------------------------------------
       addRain:
         safeNum(t.addRain),
 
@@ -363,18 +369,14 @@ async function writeDailyDebug({
           t.surfaceToSoil
         ),
 
-      // --------------------------------------------
       // DRYING
-      // --------------------------------------------
       loss:
         safeNum(t.loss),
 
       surfaceLoss:
         safeNum(t.surfaceLoss),
 
-      // --------------------------------------------
       // LIVE DAY SCALING
-      // --------------------------------------------
       dayFraction:
         safeNum(
           t.dayFraction
@@ -388,12 +390,47 @@ async function writeDailyDebug({
           t.hoursCount
         ),
 
-      // --------------------------------------------
       // FINAL PENALTY
-      // --------------------------------------------
       surfacePenalty:
         safeNum(
           t.surfacePenalty
+        )
+    };
+
+    // --------------------------------------------
+    // ETA DEBUG
+    // --------------------------------------------
+    const etaDebug = {
+
+      drydownPointsPerHour:
+        safeNum(
+          eta?.drydownPointsPerHour
+        ),
+
+      projectionHours:
+        safeNum(
+          eta?.projectionHours
+        ),
+
+      readinessGain:
+        safeNum(
+          eta?.readinessGain
+        ),
+
+      projectedReadiness:
+        safeNum(
+          eta?.projectedReadiness
+        ),
+
+      currentReadiness:
+        safeNum(
+          eta?.currentReadiness
+        ),
+
+      etaSource:
+        safeStr(
+          eta?.source,
+          "forecast_projection"
         )
     };
 
@@ -406,6 +443,7 @@ async function writeDailyDebug({
     batch.set(
       docRef,
       {
+
         fieldId,
         fieldName,
 
@@ -428,7 +466,11 @@ async function writeDailyDebug({
         factors:
           result.factors || {},
 
+        eta:
+          etaDebug,
+
         final: {
+
           readiness:
             safeNum(
               result.readiness
@@ -466,6 +508,7 @@ async function writeDailyDebug({
         },
 
         debug: {
+
           source:
             "daily-debug-writer",
 
