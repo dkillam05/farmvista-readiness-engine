@@ -23,11 +23,18 @@
 // ✅ Returns storagePhysFinal
 // ✅ Returns surfaceFinal
 // ✅ Fixes quickview preview normalization
+//
+// ETA UPDATE:
+// ✅ Added etaRate.js integration
+// ✅ Forecast rows now used ONLY for ETA
+// ✅ Returns drydownPointsPerHour
+// ✅ Returns ETA projection diagnostics
 // ============================================
 
 const { mergeWeather } = require("./weather-merge");
 const { runSoilModel } = require("./soil-model");
 const { calculateReadiness } = require("./readiness");
+const { calculateEtaRate } = require("./etaRate");
 
 // --------------------------------------------
 // HELPERS
@@ -94,11 +101,23 @@ function runReadinessEngine(
         return false;
       }
 
-      // --------------------------------------------
-      // KEEP:
-      // historical + today
-      // --------------------------------------------
       return dateISO <= todayISO;
+    });
+
+  // --------------------------------------------
+  // ETA FORECAST ROWS
+  // --------------------------------------------
+  const forecastRows =
+    allRows.filter(r => {
+
+      const dateISO =
+        String(r?.dateISO || "");
+
+      if (!dateISO) {
+        return false;
+      }
+
+      return dateISO > todayISO;
     });
 
   if (!currentRows.length) {
@@ -177,11 +196,30 @@ function runReadinessEngine(
   }
 
   // --------------------------------------------
+  // ETA RATE
+  // --------------------------------------------
+  const eta =
+    calculateEtaRate({
+
+      currentReadiness:
+        readiness.readiness,
+
+      currentRows,
+
+      forecastRows,
+
+      model,
+
+      fieldDoc
+    });
+
+  // --------------------------------------------
   // DEBUG
   // --------------------------------------------
   console.log(
     "🧪 ENGINE FINAL OUTPUT:",
     {
+
       readiness:
         readiness.readiness,
 
@@ -201,7 +239,10 @@ function runReadinessEngine(
         readiness.storageFinal,
 
       storageForReadiness:
-        readiness.storageForReadiness
+        readiness.storageForReadiness,
+
+      drydownPointsPerHour:
+        eta?.drydownPointsPerHour
     }
   );
 
@@ -272,6 +313,14 @@ function runReadinessEngine(
       readiness.readinessCreditIn,
 
     // --------------------------------------------
+    // ETA
+    // --------------------------------------------
+    eta,
+
+    drydownPointsPerHour:
+      eta?.drydownPointsPerHour ?? null,
+
+    // --------------------------------------------
     // FACTORS
     // --------------------------------------------
     factors:
@@ -319,17 +368,26 @@ function runReadinessEngine(
       currentRows:
         currentRows.length,
 
+      forecastRows:
+        forecastRows.length,
+
       forecastRowsFiltered:
         allRows.length -
         currentRows.length,
 
       todayISO,
 
+      etaDrydownPointsPerHour:
+        eta?.drydownPointsPerHour ?? null,
+
+      etaProjectionHours:
+        eta?.projectionHours ?? null,
+
       source:
         "FarmVista modular readiness engine",
 
       modelVersion:
-        "2026-05-live-preview-fixed"
+        "2026-05-eta-rate-v1"
     }
   };
 }
