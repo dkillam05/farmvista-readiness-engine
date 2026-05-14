@@ -25,8 +25,10 @@
 // ✅ Fixes quickview preview normalization
 //
 // ETA UPDATE:
-// ✅ Added etaRate.js integration
-// ✅ Forecast rows now used ONLY for ETA
+// ✅ Uses etaRate.js with SAME math pipeline
+// ✅ Passes current storage + current surface correctly
+// ✅ Passes forecast rows only
+// ✅ Future rain uses Open-Meteo inside etaRate.js
 // ✅ Returns drydownPointsPerHour
 // ✅ Returns ETA projection diagnostics
 // ============================================
@@ -39,12 +41,6 @@ const { calculateEtaRate } = require("./etaRate");
 // --------------------------------------------
 // HELPERS
 // --------------------------------------------
-function round(v, d = 2) {
-  const p = Math.pow(10, d);
-
-  return Math.round(Number(v) * p) / p;
-}
-
 function getTodayISO() {
   return new Date()
     .toISOString()
@@ -76,56 +72,42 @@ function runReadinessEngine(
       : [];
 
   if (!allRows.length) {
-
     return {
       ok: false,
-      error:
-        "No weather rows available"
+      error: "No weather rows available"
     };
   }
 
   // --------------------------------------------
-  // IMPORTANT:
-  // CURRENT CONDITIONS ONLY
+  // SPLIT CURRENT VS FORECAST
   // --------------------------------------------
   const todayISO =
     getTodayISO();
 
   const currentRows =
     allRows.filter(r => {
-
       const dateISO =
         String(r?.dateISO || "");
 
-      if (!dateISO) {
-        return false;
-      }
+      if (!dateISO) return false;
 
       return dateISO <= todayISO;
     });
 
-  // --------------------------------------------
-  // ETA FORECAST ROWS
-  // --------------------------------------------
   const forecastRows =
     allRows.filter(r => {
-
       const dateISO =
         String(r?.dateISO || "");
 
-      if (!dateISO) {
-        return false;
-      }
+      if (!dateISO) return false;
 
       return dateISO > todayISO;
     });
 
   if (!currentRows.length) {
-
     return {
       ok: false,
-      error:
-        "No current weather rows available"
+      error: "No current weather rows available"
     };
   }
 
@@ -133,7 +115,6 @@ function runReadinessEngine(
   // SEED HANDLING
   // --------------------------------------------
   const seed = {
-
     mode:
       opts.seedMode ||
       "baseline_30d",
@@ -154,7 +135,7 @@ function runReadinessEngine(
   };
 
   // --------------------------------------------
-  // RUN MODEL
+  // RUN CURRENT MODEL
   // --------------------------------------------
   const model =
     runSoilModel(
@@ -166,16 +147,14 @@ function runReadinessEngine(
     );
 
   if (!model) {
-
     return {
       ok: false,
-      error:
-        "Soil model failed"
+      error: "Soil model failed"
     };
   }
 
   // --------------------------------------------
-  // READINESS
+  // CURRENT READINESS
   // --------------------------------------------
   const readiness =
     calculateReadiness(
@@ -187,30 +166,37 @@ function runReadinessEngine(
     );
 
   if (!readiness) {
-
     return {
       ok: false,
-      error:
-        "Readiness calculation failed"
+      error: "Readiness calculation failed"
     };
   }
 
   // --------------------------------------------
   // ETA RATE
+  //
+  // IMPORTANT:
+  // ETA starts from the CURRENT model state,
+  // then runs FORECAST rows only through the
+  // same soil-model + readiness pipeline.
   // --------------------------------------------
   const eta =
     calculateEtaRate({
-
       currentReadiness:
         readiness.readiness,
 
-      currentRows,
+      currentStorage:
+        model.storageFinal,
+
+      currentSurface:
+        model.surfaceFinal,
 
       forecastRows,
 
-      model,
+      fieldDoc,
 
-      fieldDoc
+      globalStorageMult:
+        opts.globalStorageMult ?? 1.0
     });
 
   // --------------------------------------------
@@ -219,7 +205,6 @@ function runReadinessEngine(
   console.log(
     "🧪 ENGINE FINAL OUTPUT:",
     {
-
       readiness:
         readiness.readiness,
 
@@ -232,17 +217,26 @@ function runReadinessEngine(
       wetnessR:
         readiness.wetnessR,
 
-      sliderBias:
-        readiness.sliderBias,
-
       storageFinal:
         readiness.storageFinal,
+
+      storagePhysFinal:
+        model.storageFinal,
+
+      surfaceFinal:
+        model.surfaceFinal,
 
       storageForReadiness:
         readiness.storageForReadiness,
 
+      etaOk:
+        eta?.ok === true,
+
+      etaReason:
+        eta?.reason || null,
+
       drydownPointsPerHour:
-        eta?.drydownPointsPerHour
+        eta?.drydownPointsPerHour ?? null
     }
   );
 
@@ -250,7 +244,6 @@ function runReadinessEngine(
   // RETURN
   // --------------------------------------------
   return {
-
     ok: true,
 
     fieldId:
@@ -264,8 +257,7 @@ function runReadinessEngine(
       null,
 
     // --------------------------------------------
-    // IMPORTANT:
-    // RETURN BOTH RAW + ROUNDED
+    // READINESS
     // --------------------------------------------
     readiness:
       readiness.readiness,
@@ -333,8 +325,7 @@ function runReadinessEngine(
       model.trace,
 
     // --------------------------------------------
-    // IMPORTANT:
-    // RETURN ONLY CURRENT ROWS
+    // CURRENT ROWS ONLY
     // --------------------------------------------
     rows:
       currentRows,
@@ -343,7 +334,6 @@ function runReadinessEngine(
     // DEBUG
     // --------------------------------------------
     debug: {
-
       seedMode:
         seed.mode,
 
@@ -355,9 +345,6 @@ function runReadinessEngine(
 
       globalStorageMultApplied:
         readiness.globalStorageMultApplied,
-
-      sliderBias:
-        readiness.sliderBias,
 
       Smax:
         readiness.Smax,
@@ -377,6 +364,12 @@ function runReadinessEngine(
 
       todayISO,
 
+      etaOk:
+        eta?.ok === true,
+
+      etaReason:
+        eta?.reason || null,
+
       etaDrydownPointsPerHour:
         eta?.drydownPointsPerHour ?? null,
 
@@ -387,7 +380,7 @@ function runReadinessEngine(
         "FarmVista modular readiness engine",
 
       modelVersion:
-        "2026-05-eta-rate-v1"
+        "2026-05-eta-rate-v2"
     }
   };
 }
