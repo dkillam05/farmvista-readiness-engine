@@ -16,6 +16,13 @@
 //
 // Forecast rows should ONLY be used later
 // by ETA / future projection logic.
+//
+// UPDATED:
+// ✅ Returns BOTH readiness + readinessR
+// ✅ Returns BOTH wetness + wetnessR
+// ✅ Returns storagePhysFinal
+// ✅ Returns surfaceFinal
+// ✅ Fixes quickview preview normalization
 // ============================================
 
 const { mergeWeather } = require("./weather-merge");
@@ -27,126 +34,182 @@ const { calculateReadiness } = require("./readiness");
 // --------------------------------------------
 function round(v, d = 2) {
   const p = Math.pow(10, d);
+
   return Math.round(Number(v) * p) / p;
 }
 
 function getTodayISO() {
-  return new Date().toISOString().slice(0, 10);
+  return new Date()
+    .toISOString()
+    .slice(0, 10);
 }
 
 // --------------------------------------------
 // MAIN ENGINE
 // --------------------------------------------
-function runReadinessEngine(wxDoc, mrmsDoc, fieldDoc, opts = {}) {
+function runReadinessEngine(
+  wxDoc,
+  mrmsDoc,
+  fieldDoc,
+  opts = {}
+) {
 
   // --------------------------------------------
   // MERGE WEATHER
   // --------------------------------------------
-  const merged = mergeWeather(wxDoc, mrmsDoc);
+  const merged =
+    mergeWeather(
+      wxDoc,
+      mrmsDoc
+    );
 
-  const allRows = Array.isArray(merged.daily)
-    ? merged.daily
-    : [];
+  const allRows =
+    Array.isArray(merged.daily)
+      ? merged.daily
+      : [];
 
   if (!allRows.length) {
+
     return {
       ok: false,
-      error: "No weather rows available"
+      error:
+        "No weather rows available"
     };
   }
 
   // --------------------------------------------
   // IMPORTANT:
   // CURRENT CONDITIONS ONLY
-  //
-  // Readiness must represent:
-  // "right now"
-  //
-  // NOT future forecast rain.
   // --------------------------------------------
-  const todayISO = getTodayISO();
+  const todayISO =
+    getTodayISO();
 
-  const currentRows = allRows.filter(r => {
+  const currentRows =
+    allRows.filter(r => {
 
-    const dateISO =
-      String(r?.dateISO || "");
+      const dateISO =
+        String(r?.dateISO || "");
 
-    if (!dateISO) {
-      return false;
-    }
+      if (!dateISO) {
+        return false;
+      }
 
-    // --------------------------------------------
-    // KEEP:
-    // historical + today
-    // --------------------------------------------
-    return dateISO <= todayISO;
-  });
+      // --------------------------------------------
+      // KEEP:
+      // historical + today
+      // --------------------------------------------
+      return dateISO <= todayISO;
+    });
 
   if (!currentRows.length) {
+
     return {
       ok: false,
-      error: "No current weather rows available"
+      error:
+        "No current weather rows available"
     };
   }
 
   // --------------------------------------------
-  // NEW: SEED HANDLING
+  // SEED HANDLING
   // --------------------------------------------
   const seed = {
-    mode: opts.seedMode || "baseline_30d",
+
+    mode:
+      opts.seedMode ||
+      "baseline_30d",
 
     storage:
-      Number.isFinite(Number(opts.seedStorage))
+      Number.isFinite(
+        Number(opts.seedStorage)
+      )
         ? Number(opts.seedStorage)
         : null,
 
     surface:
-      Number.isFinite(Number(opts.seedSurface))
+      Number.isFinite(
+        Number(opts.seedSurface)
+      )
         ? Number(opts.seedSurface)
         : null
   };
 
   // --------------------------------------------
   // RUN MODEL
-  // (CURRENT ROWS ONLY)
   // --------------------------------------------
-  const model = runSoilModel(
-    currentRows,
-    fieldDoc,
-    {
-      seed
-    }
-  );
+  const model =
+    runSoilModel(
+      currentRows,
+      fieldDoc,
+      {
+        seed
+      }
+    );
 
   if (!model) {
+
     return {
       ok: false,
-      error: "Soil model failed"
+      error:
+        "Soil model failed"
     };
   }
 
   // --------------------------------------------
   // READINESS
   // --------------------------------------------
-  const readiness = calculateReadiness(
-    model,
-    {
-      globalStorageMult:
-        opts.globalStorageMult ?? 1.0
-    }
-  );
+  const readiness =
+    calculateReadiness(
+      model,
+      {
+        globalStorageMult:
+          opts.globalStorageMult ?? 1.0
+      }
+    );
 
   if (!readiness) {
+
     return {
       ok: false,
-      error: "Readiness calculation failed"
+      error:
+        "Readiness calculation failed"
     };
   }
+
+  // --------------------------------------------
+  // DEBUG
+  // --------------------------------------------
+  console.log(
+    "🧪 ENGINE FINAL OUTPUT:",
+    {
+      readiness:
+        readiness.readiness,
+
+      readinessR:
+        readiness.readinessR,
+
+      wetness:
+        readiness.wetness,
+
+      wetnessR:
+        readiness.wetnessR,
+
+      sliderBias:
+        readiness.sliderBias,
+
+      storageFinal:
+        readiness.storageFinal,
+
+      storageForReadiness:
+        readiness.storageForReadiness
+    }
+  );
 
   // --------------------------------------------
   // RETURN
   // --------------------------------------------
   return {
+
     ok: true,
 
     fieldId:
@@ -159,20 +222,45 @@ function runReadinessEngine(wxDoc, mrmsDoc, fieldDoc, opts = {}) {
       fieldDoc?.fieldName ||
       null,
 
+    // --------------------------------------------
+    // IMPORTANT:
+    // RETURN BOTH RAW + ROUNDED
+    // --------------------------------------------
     readiness:
+      readiness.readiness,
+
+    readinessR:
       readiness.readinessR,
 
     wetness:
+      readiness.wetness,
+
+    wetnessR:
       readiness.wetnessR,
 
     baseReadiness:
+      readiness.baseReadiness,
+
+    baseReadinessR:
       readiness.baseReadinessR,
 
     surfacePenalty:
+      readiness.surfacePenalty,
+
+    surfacePenaltyR:
       readiness.surfacePenaltyR,
 
+    // --------------------------------------------
+    // STORAGE
+    // --------------------------------------------
     storageFinal:
       readiness.storageFinal,
+
+    storagePhysFinal:
+      model.storageFinal,
+
+    surfaceFinal:
+      model.surfaceFinal,
 
     surfaceStorageFinal:
       readiness.surfaceStorageFinal,
@@ -183,15 +271,21 @@ function runReadinessEngine(wxDoc, mrmsDoc, fieldDoc, opts = {}) {
     readinessCreditIn:
       readiness.readinessCreditIn,
 
+    // --------------------------------------------
+    // FACTORS
+    // --------------------------------------------
     factors:
       model.factors,
 
+    // --------------------------------------------
+    // TRACE
+    // --------------------------------------------
     trace:
       model.trace,
 
     // --------------------------------------------
     // IMPORTANT:
-    // return ONLY current rows
+    // RETURN ONLY CURRENT ROWS
     // --------------------------------------------
     rows:
       currentRows,
@@ -213,6 +307,9 @@ function runReadinessEngine(wxDoc, mrmsDoc, fieldDoc, opts = {}) {
       globalStorageMultApplied:
         readiness.globalStorageMultApplied,
 
+      sliderBias:
+        readiness.sliderBias,
+
       Smax:
         readiness.Smax,
 
@@ -223,7 +320,8 @@ function runReadinessEngine(wxDoc, mrmsDoc, fieldDoc, opts = {}) {
         currentRows.length,
 
       forecastRowsFiltered:
-        allRows.length - currentRows.length,
+        allRows.length -
+        currentRows.length,
 
       todayISO,
 
@@ -231,7 +329,7 @@ function runReadinessEngine(wxDoc, mrmsDoc, fieldDoc, opts = {}) {
         "FarmVista modular readiness engine",
 
       modelVersion:
-        "2026-05-current-only-live-readiness"
+        "2026-05-live-preview-fixed"
     }
   };
 }
