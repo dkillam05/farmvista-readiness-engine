@@ -4,13 +4,15 @@
 // Dynamic infiltration + holding/drainage factors
 // for FarmVista readiness model
 //
-// NEW:
-// ✅ Dynamic infiltration based on saturation
-// ✅ Dry soils absorb rainfall faster
-// ✅ Saturated soils infiltrate slower
-// ✅ Surface water suppresses infiltration
-// ✅ Poor drainage increases saturation sensitivity
-// ✅ Sandy/tiled soils infiltrate aggressively
+// SLIDER MEANING:
+// ✅ soilWetness:   0 = dry/light soil, 100 = wet/heavy holding soil
+// ✅ drainageIndex: 0 = well-drained, 100 = poorly drained
+//
+// FIXED:
+// ✅ Higher soilWetness now dries SLOWER
+// ✅ Higher drainageIndex now dries SLOWER
+// ✅ 0/0 now behaves like dry, well-drained ground
+// ✅ 100/100 now behaves like wet, poorly drained ground
 // ============================================
 
 // --------------------------------------------
@@ -64,17 +66,15 @@ function mapFactors(
   drainageIndex0_100,
   sm010
 ) {
-  const soilHoldRaw =
-    safePct01(soilWetness0_100);
-
-  const drainPoorRaw =
-    safePct01(drainageIndex0_100);
-
   const soilHold =
-    snap01(soilHoldRaw);
+    snap01(
+      safePct01(soilWetness0_100)
+    );
 
   const drainPoor =
-    snap01(drainPoorRaw);
+    snap01(
+      safePct01(drainageIndex0_100)
+    );
 
   const smN =
     sm010 === null ||
@@ -87,58 +87,56 @@ function mapFactors(
           1
         );
 
-  // ============================================
-  // MUCH STRONGER FIELD DIFFERENTIATION
-  // ============================================
-
   // --------------------------------------------
-  // DRYING SPEED
+  // DRYING MULTIPLIER
   //
-  // LOW values:
-  // dries fast
+  // IMPORTANT:
+  // Higher number = MORE drydown per day.
   //
-  // HIGH values:
-  // dries slow
+  // 0/0 = dry + well drained = dries fastest
+  // 100/100 = wet + poor drainage = dries slowest
   // --------------------------------------------
   const dryMult =
     clamp(
       1.45 -
-      0.65 * soilHold -
-      0.75 * drainPoor,
-      0.18,
-      1.55
+        0.45 * soilHold -
+        0.55 * drainPoor,
+      0.35,
+      1.45
     );
 
   // --------------------------------------------
   // STORAGE CAPACITY
   //
-  // Sandy/tiled:
-  // low storage
-  //
-  // Heavy/wet:
-  // high storage
+  // 0/0 = low holding capacity
+  // 100/100 = high holding capacity
   // --------------------------------------------
   const SmaxBase =
     2.2 +
-    2.2 * soilHold +
-    2.4 * drainPoor;
+      1.6 * soilHold +
+      1.8 * drainPoor;
 
   const Smax =
-    clamp(SmaxBase, 2.0, 7.0);
+    clamp(
+      SmaxBase,
+      2.2,
+      5.6
+    );
 
   // --------------------------------------------
   // BASE INFILTRATION
   //
-  // Sandy/tiled:
-  // aggressive infiltration
-  //
-  // Tight/wet:
-  // slow infiltration
+  // 0/0 = aggressive infiltration
+  // 100/100 = slower infiltration
   // --------------------------------------------
   const infilBase =
-    1.35 -
-    0.55 * soilHold -
-    0.60 * drainPoor;
+    clamp(
+      1.35 -
+        0.45 * soilHold -
+        0.50 * drainPoor,
+      0.30,
+      1.35
+    );
 
   console.log("🧪 MAP FACTORS:", {
     soilWetness0_100,
@@ -163,15 +161,12 @@ function mapFactors(
     Smax,
     SmaxBase,
 
-    infilBase: round(
-      clamp(infilBase, 0.15, 1.5)
-    )
+    infilBase: round(infilBase)
   };
 }
 
 // --------------------------------------------
 // DYNAMIC INFILTRATION
-// THIS IS THE IMPORTANT NEW PART
 // --------------------------------------------
 function dynamicInfiltration({
   storage = 0,
@@ -191,37 +186,20 @@ function dynamicInfiltration({
   const drainPoor =
     Number(factors.drainPoor || 0);
 
-  // --------------------------------------------
-  // SATURATION RATIO
-  // --------------------------------------------
   const sat =
     Smax > 0
       ? clamp(storage / Smax, 0, 1.25)
       : 0;
 
-  // --------------------------------------------
-  // SURFACE SATURATION EFFECT
-  // Ponding strongly suppresses infiltration
-  // --------------------------------------------
   const surfacePenalty =
     clamp(surface / 2.5, 0, 0.75);
 
-  // --------------------------------------------
-  // SATURATION COLLAPSE
-  // As soils saturate, infiltration falls off
-  // rapidly especially in poorly drained soils
-  // --------------------------------------------
   const saturationCollapse =
     Math.pow(
       sat,
       1.35 + 0.9 * drainPoor
     );
 
-  // --------------------------------------------
-  // DRY SOIL BOOST
-  // Dry soils aggressively absorb water
-  // especially sandy/tiled soils
-  // --------------------------------------------
   const dryBoost =
     (1 - sat) *
     (
@@ -230,11 +208,6 @@ function dynamicInfiltration({
       0.20 * (1 - drainPoor)
     );
 
-  // --------------------------------------------
-  // HEAVY RAIN RUNOFF EFFECT
-  // Big rainfall events exceed intake rates
-  // especially on saturated fields
-  // --------------------------------------------
   const rainIntensityPenalty =
     clamp(
       rain / 2.5,
@@ -242,9 +215,6 @@ function dynamicInfiltration({
       0.45
     ) * sat;
 
-  // --------------------------------------------
-  // FINAL INFILTRATION
-  // --------------------------------------------
   let infilMult =
     infilBase +
     dryBoost -
@@ -258,9 +228,6 @@ function dynamicInfiltration({
     1.35
   );
 
-  // --------------------------------------------
-  // RUNOFF FRACTION
-  // --------------------------------------------
   const runoffFrac =
     clamp(
       1 - infilMult,
@@ -277,15 +244,11 @@ function dynamicInfiltration({
 
     surfacePenalty: round(surfacePenalty),
 
-    saturationCollapse: round(
-      saturationCollapse
-    ),
+    saturationCollapse: round(saturationCollapse),
 
     dryBoost: round(dryBoost),
 
-    rainIntensityPenalty: round(
-      rainIntensityPenalty
-    )
+    rainIntensityPenalty: round(rainIntensityPenalty)
   };
 }
 
