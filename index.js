@@ -448,63 +448,85 @@ app.get("/preview-readiness", async (req, res) => {
     // --------------------------------------------
     // RETURN PREVIEW ONLY
     // --------------------------------------------
-    return res.json({
+return res.json({
 
-      ok: true,
+  ok: true,
 
-      preview: true,
+  preview: true,
 
-      fieldId,
+  fieldId,
 
-      readiness:
-        result.readiness,
+  // --------------------------------------------
+  // SUPPORT BOTH ENGINE OUTPUT FORMATS
+  // --------------------------------------------
+  readiness:
+    result.readiness ??
+    result.readinessR,
 
-      wetness:
-        result.wetness,
+  readinessR:
+    result.readinessR ??
+    result.readiness,
 
-      baseReadiness:
-        result.baseReadiness,
+  wetness:
+    result.wetness ??
+    result.wetnessR,
 
-      surfacePenalty:
-        result.surfacePenalty,
+  wetnessR:
+    result.wetnessR ??
+    result.wetness,
 
-      storageFinal:
-        result.storageFinal,
+  baseReadiness:
+    result.baseReadiness,
 
-      surfaceStorageFinal:
-        result.surfaceStorageFinal,
+  surfacePenalty:
+    result.surfacePenalty,
 
-      storageForReadiness:
-        result.storageForReadiness,
+  storageFinal:
+    result.storageFinal,
 
-      readinessCreditIn:
-        result.readinessCreditIn,
+  surfaceStorageFinal:
+    result.surfaceStorageFinal,
 
-      factors:
-        result.factors,
+  storageForReadiness:
+    result.storageForReadiness,
 
-      debug: {
-        source: "preview-readiness",
-        seedMode,
-        soilWetness:
-          field.soilWetness,
+  storagePhysFinal:
+    result.storagePhysFinal,
 
-        drainageIndex:
-          field.drainageIndex
-      }
-    });
+  readinessCreditIn:
+    result.readinessCreditIn,
 
-  } catch (err) {
+  factors:
+    result.factors,
 
-    console.error(
-      "🔥 Preview route error:",
-      err
-    );
+  trace:
+    result.trace || [],
 
-    return res.status(500).json({
-      ok: false,
-      error: err.message
-    });
+  rows:
+    result.rows || [],
+
+  debug: {
+    source: "preview-readiness",
+
+    seedMode,
+
+    soilWetness:
+      field.soilWetness,
+
+    drainageIndex:
+      field.drainageIndex,
+
+    returnedReadiness:
+      result.readiness,
+
+    returnedReadinessR:
+      result.readinessR,
+
+    returnedWetness:
+      result.wetness,
+
+    returnedWetnessR:
+      result.wetnessR
   }
 });
 
