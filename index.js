@@ -17,6 +17,7 @@ const { writeDailyDebug } = require("./js/daily-debug-writer");
 // INIT FIREBASE
 // --------------------------------------------
 admin.initializeApp();
+
 const db = admin.firestore();
 
 const app = express();
@@ -35,7 +36,10 @@ const FIELD_CONDITIONS = "field_conditions_current";
 // HELPERS
 // --------------------------------------------
 function isSameLocation(a, b, epsilon = 0.00001) {
-  if (!a || !b) return false;
+
+  if (!a || !b) {
+    return false;
+  }
 
   return (
     Math.abs(Number(a.lat) - Number(b.lat)) < epsilon &&
@@ -44,6 +48,7 @@ function isSameLocation(a, b, epsilon = 0.00001) {
 }
 
 function clamp(n, lo, hi) {
+
   n = Number(n);
 
   if (!Number.isFinite(n)) {
@@ -60,7 +65,8 @@ async function run() {
 
   console.log("🚜 Starting readiness run...");
 
-  const fieldsSnap = await db.collection(FIELDS).get();
+  const fieldsSnap =
+    await db.collection(FIELDS).get();
 
   const results = [];
   const batch = db.batch();
@@ -78,18 +84,24 @@ async function run() {
 
     console.log(`\n➡️ Field: ${field.name}`);
 
-    const wxDoc = await db
-      .collection(WEATHER)
-      .doc(doc.id)
-      .get();
+    const wxDoc =
+      await db
+        .collection(WEATHER)
+        .doc(doc.id)
+        .get();
 
-    const mrmsDoc = await db
-      .collection(MRMS)
-      .doc(doc.id)
-      .get();
+    const mrmsDoc =
+      await db
+        .collection(MRMS)
+        .doc(doc.id)
+        .get();
 
     if (!wxDoc.exists) {
-      console.log("❌ No weather data — skipping write");
+
+      console.log(
+        "❌ No weather data — skipping write"
+      );
+
       continue;
     }
 
@@ -97,21 +109,27 @@ async function run() {
     // REQUIRE MRMS FOR HISTORY
     // --------------------------------------------
     if (!mrmsDoc.exists) {
-      console.log("❌ Missing MRMS rainfall — skipping");
+
+      console.log(
+        "❌ Missing MRMS rainfall — skipping"
+      );
+
       continue;
     }
 
     // --------------------------------------------
     // LOAD EXISTING STATE
     // --------------------------------------------
-    const existingDocSnap = await db
-      .collection(FIELD_CONDITIONS)
-      .doc(doc.id)
-      .get();
+    const existingDocSnap =
+      await db
+        .collection(FIELD_CONDITIONS)
+        .doc(doc.id)
+        .get();
 
-    const existing = existingDocSnap.exists
-      ? existingDocSnap.data()
-      : null;
+    const existing =
+      existingDocSnap.exists
+        ? existingDocSnap.data()
+        : null;
 
     // --------------------------------------------
     // DETERMINE SEED MODE
@@ -131,7 +149,8 @@ async function run() {
       )
     ) {
 
-      seedMode = "location_changed_baseline_30d";
+      seedMode =
+        "location_changed_baseline_30d";
 
     } else if (
       Number.isFinite(existing?.soil?.storage) &&
@@ -140,34 +159,57 @@ async function run() {
 
       seedMode = "rolling";
 
-      seedStorage = Number(existing.soil.storage);
-      seedSurface = Number(existing.surface.water);
+      seedStorage =
+        Number(existing.soil.storage);
+
+      seedSurface =
+        Number(existing.surface.water);
     }
 
-    console.log("🌱 Seed Mode:", seedMode);
+    console.log(
+      "🌱 Seed Mode:",
+      seedMode
+    );
 
     // --------------------------------------------
     // RUN ENGINE
     // --------------------------------------------
-    const result = runReadinessEngine(
-      wxDoc.data(),
-      mrmsDoc.data(),
-      field,
-      {
-        seedMode,
-        seedStorage,
-        seedSurface
-      }
-    );
+    const result =
+      runReadinessEngine(
+        wxDoc.data(),
+        mrmsDoc.data(),
+        field,
+        {
+          seedMode,
+          seedStorage,
+          seedSurface
+        }
+      );
 
-    if (!result.ok) {
-      console.log("❌ Failed:", result.error);
+    if (!result || !result.ok) {
+
+      console.log(
+        "❌ Failed:",
+        result?.error || "Unknown engine failure"
+      );
+
       continue;
     }
 
-    console.log("✅ Readiness:", result.readiness);
-    console.log("   Wetness:", result.wetness);
-    console.log("   Surface:", result.surfaceStorageFinal);
+    console.log(
+      "✅ Readiness:",
+      result.readiness
+    );
+
+    console.log(
+      "   Wetness:",
+      result.wetness
+    );
+
+    console.log(
+      "   Surface:",
+      result.surfaceStorageFinal
+    );
 
     results.push({
       fieldId: doc.id,
@@ -180,51 +222,88 @@ async function run() {
     // --------------------------------------------
     // WRITE MAIN SNAPSHOT
     // --------------------------------------------
-    const outRef = db
-      .collection(FIELD_CONDITIONS)
-      .doc(doc.id);
+    const outRef =
+      db.collection(FIELD_CONDITIONS)
+        .doc(doc.id);
 
     batch.set(
       outRef,
       {
         fieldId: doc.id,
-        fieldName: field.name || null,
+        fieldName:
+          field.name || null,
 
-        farmId: field.farmId || null,
-        farmName: field.farmName || null,
+        farmId:
+          field.farmId || null,
 
-        location: field.location || null,
-        county: field.county || null,
-        state: field.state || null,
+        farmName:
+          field.farmName || null,
 
-        readiness: Number(result.readiness),
-        wetness: Number(result.wetness),
+        location:
+          field.location || null,
 
-        baseReadiness: Number(
-          result.baseReadiness ?? result.readiness
-        ),
+        county:
+          field.county || null,
 
-        surfacePenalty: Number(
-          result.surfacePenalty ?? 0
-        ),
+        state:
+          field.state || null,
+
+        readiness:
+          Number(result.readiness),
+
+        wetness:
+          Number(result.wetness),
+
+        baseReadiness:
+          Number(
+            result.baseReadiness ??
+            result.readiness
+          ),
+
+        surfacePenalty:
+          Number(
+            result.surfacePenalty ?? 0
+          ),
 
         soil: {
-          storage: Number(result.storageFinal),
+          storage:
+            Number(result.storageFinal),
 
-          Smax: Number(
-            result.factors?.Smax || 0
-          )
+          Smax:
+            Number(
+              result?.factors?.Smax || 0
+            )
         },
 
         surface: {
-          water: Number(
-            result.surfaceStorageFinal
+          water:
+            Number(
+              result.surfaceStorageFinal
+            ),
+
+          penalty:
+            Number(
+              result.surfacePenalty ?? 0
+            )
+        },
+
+        storageFinal:
+          Number(result.storageFinal ?? 0),
+
+        surfaceStorageFinal:
+          Number(
+            result.surfaceStorageFinal ?? 0
           ),
 
-          penalty: Number(
-            result.surfacePenalty ?? 0
-          )
-        },
+        storageForReadiness:
+          Number(
+            result.storageForReadiness ?? 0
+          ),
+
+        readinessCreditIn:
+          Number(
+            result.readinessCreditIn ?? 0
+          ),
 
         asOfDateISO:
           new Date()
@@ -234,8 +313,11 @@ async function run() {
         computedAt:
           admin.firestore.FieldValue.serverTimestamp(),
 
-        modelVersion: "2026-seed-system",
-        source: "farmvista-engine",
+        modelVersion:
+          "2026-seed-system",
+
+        source:
+          "farmvista-engine",
 
         seedMode,
 
@@ -275,8 +357,13 @@ async function run() {
   // --------------------------------------------
   await batch.commit();
 
-  console.log("💾 Firestore write complete");
-  console.log("\n✅ Run complete");
+  console.log(
+    "💾 Firestore write complete"
+  );
+
+  console.log(
+    "\n✅ Run complete"
+  );
 
   return results;
 }
@@ -298,237 +385,279 @@ app.get("/", (req, res) => {
 // ============================================
 // LIVE PREVIEW ROUTE
 // ============================================
-app.get("/preview-readiness", async (req, res) => {
+app.get(
+  "/preview-readiness",
+  async (req, res) => {
 
-  try {
+    try {
 
-    const fieldId =
-      String(req.query.fieldId || "").trim();
+      const fieldId =
+        String(
+          req.query.fieldId || ""
+        ).trim();
 
-    if (!fieldId) {
-      return res.status(400).json({
-        ok: false,
-        error: "Missing fieldId"
-      });
-    }
+      if (!fieldId) {
 
-    // --------------------------------------------
-    // LOAD FIELD
-    // --------------------------------------------
-    const fieldSnap = await db
-      .collection(FIELDS)
-      .doc(fieldId)
-      .get();
-
-    if (!fieldSnap.exists) {
-      return res.status(404).json({
-        ok: false,
-        error: "Field not found"
-      });
-    }
-
-    const field = {
-      id: fieldSnap.id,
-      ...fieldSnap.data()
-    };
-
-    // --------------------------------------------
-    // APPLY TEMP SLIDER VALUES
-    // --------------------------------------------
-    if (req.query.soilWetness != null) {
-
-      field.soilWetness = clamp(
-        req.query.soilWetness,
-        0,
-        100
-      );
-    }
-
-    if (req.query.drainageIndex != null) {
-
-      field.drainageIndex = clamp(
-        req.query.drainageIndex,
-        0,
-        100
-      );
-    }
-
-    // --------------------------------------------
-    // LOAD WEATHER
-    // --------------------------------------------
-    const wxDoc = await db
-      .collection(WEATHER)
-      .doc(fieldId)
-      .get();
-
-    if (!wxDoc.exists) {
-      return res.status(404).json({
-        ok: false,
-        error: "Weather cache missing"
-      });
-    }
-
-    // --------------------------------------------
-    // LOAD MRMS
-    // --------------------------------------------
-    const mrmsDoc = await db
-      .collection(MRMS)
-      .doc(fieldId)
-      .get();
-
-    if (!mrmsDoc.exists) {
-      return res.status(404).json({
-        ok: false,
-        error: "MRMS cache missing"
-      });
-    }
-
-    // --------------------------------------------
-    // LOAD CURRENT STATE
-    // --------------------------------------------
-    const existingDocSnap = await db
-      .collection(FIELD_CONDITIONS)
-      .doc(fieldId)
-      .get();
-
-    const existing = existingDocSnap.exists
-      ? existingDocSnap.data()
-      : null;
-
-    let seedMode = "baseline_30d";
-    let seedStorage = null;
-    let seedSurface = null;
-
-    if (!existing) {
-
-      seedMode = "baseline_30d";
-
-    } else if (
-      !isSameLocation(
-        existing.location,
-        field.location
-      )
-    ) {
-
-      seedMode = "location_changed_baseline_30d";
-
-    } else if (
-      Number.isFinite(existing?.soil?.storage) &&
-      Number.isFinite(existing?.surface?.water)
-    ) {
-
-      seedMode = "rolling";
-
-      seedStorage = Number(existing.soil.storage);
-      seedSurface = Number(existing.surface.water);
-    }
-
-    // --------------------------------------------
-    // RUN ENGINE
-    // --------------------------------------------
-    const result = runReadinessEngine(
-      wxDoc.data(),
-      mrmsDoc.data(),
-      field,
-      {
-        seedMode,
-        seedStorage,
-        seedSurface
+        return res.status(400).json({
+          ok: false,
+          error: "Missing fieldId"
+        });
       }
-    );
 
-    if (!result.ok) {
+      // --------------------------------------------
+      // LOAD FIELD
+      // --------------------------------------------
+      const fieldSnap =
+        await db
+          .collection(FIELDS)
+          .doc(fieldId)
+          .get();
+
+      if (!fieldSnap.exists) {
+
+        return res.status(404).json({
+          ok: false,
+          error: "Field not found"
+        });
+      }
+
+      const field = {
+        id: fieldSnap.id,
+        ...fieldSnap.data()
+      };
+
+      // --------------------------------------------
+      // APPLY TEMP SLIDER VALUES
+      // --------------------------------------------
+      if (
+        req.query.soilWetness != null
+      ) {
+
+        field.soilWetness =
+          clamp(
+            req.query.soilWetness,
+            0,
+            100
+          );
+      }
+
+      if (
+        req.query.drainageIndex != null
+      ) {
+
+        field.drainageIndex =
+          clamp(
+            req.query.drainageIndex,
+            0,
+            100
+          );
+      }
+
+      // --------------------------------------------
+      // LOAD WEATHER
+      // --------------------------------------------
+      const wxDoc =
+        await db
+          .collection(WEATHER)
+          .doc(fieldId)
+          .get();
+
+      if (!wxDoc.exists) {
+
+        return res.status(404).json({
+          ok: false,
+          error:
+            "Weather cache missing"
+        });
+      }
+
+      // --------------------------------------------
+      // LOAD MRMS
+      // --------------------------------------------
+      const mrmsDoc =
+        await db
+          .collection(MRMS)
+          .doc(fieldId)
+          .get();
+
+      if (!mrmsDoc.exists) {
+
+        return res.status(404).json({
+          ok: false,
+          error:
+            "MRMS cache missing"
+        });
+      }
+
+      // --------------------------------------------
+      // LOAD CURRENT STATE
+      // --------------------------------------------
+      const existingDocSnap =
+        await db
+          .collection(FIELD_CONDITIONS)
+          .doc(fieldId)
+          .get();
+
+      const existing =
+        existingDocSnap.exists
+          ? existingDocSnap.data()
+          : null;
+
+      let seedMode = "baseline_30d";
+      let seedStorage = null;
+      let seedSurface = null;
+
+      if (!existing) {
+
+        seedMode = "baseline_30d";
+
+      } else if (
+        !isSameLocation(
+          existing.location,
+          field.location
+        )
+      ) {
+
+        seedMode =
+          "location_changed_baseline_30d";
+
+      } else if (
+        Number.isFinite(existing?.soil?.storage) &&
+        Number.isFinite(existing?.surface?.water)
+      ) {
+
+        seedMode = "rolling";
+
+        seedStorage =
+          Number(existing.soil.storage);
+
+        seedSurface =
+          Number(existing.surface.water);
+      }
+
+      // --------------------------------------------
+      // RUN ENGINE
+      // --------------------------------------------
+      const result =
+        runReadinessEngine(
+          wxDoc.data(),
+          mrmsDoc.data(),
+          field,
+          {
+            seedMode,
+            seedStorage,
+            seedSurface
+          }
+        );
+
+      if (!result || !result.ok) {
+
+        return res.status(500).json({
+          ok: false,
+          error:
+            result?.error ||
+            "Engine failed"
+        });
+      }
+
+      // --------------------------------------------
+      // RETURN PREVIEW
+      // --------------------------------------------
+      return res.json({
+
+        ok: true,
+
+        preview: true,
+
+        fieldId,
+
+        readiness:
+          result.readiness ??
+          result.readinessR,
+
+        readinessR:
+          result.readinessR ??
+          result.readiness,
+
+        wetness:
+          result.wetness ??
+          result.wetnessR,
+
+        wetnessR:
+          result.wetnessR ??
+          result.wetness,
+
+        baseReadiness:
+          result.baseReadiness,
+
+        surfacePenalty:
+          result.surfacePenalty,
+
+        storageFinal:
+          result.storageFinal,
+
+        surfaceStorageFinal:
+          result.surfaceStorageFinal,
+
+        storageForReadiness:
+          result.storageForReadiness,
+
+        storagePhysFinal:
+          result.storagePhysFinal,
+
+        readinessCreditIn:
+          result.readinessCreditIn,
+
+        factors:
+          result.factors,
+
+        trace:
+          result.trace || [],
+
+        rows:
+          result.rows || [],
+
+        debug: {
+
+          source:
+            "preview-readiness",
+
+          seedMode,
+
+          soilWetness:
+            field.soilWetness,
+
+          drainageIndex:
+            field.drainageIndex,
+
+          returnedReadiness:
+            result.readiness,
+
+          returnedReadinessR:
+            result.readinessR,
+
+          returnedWetness:
+            result.wetness,
+
+          returnedWetnessR:
+            result.wetnessR
+        }
+      });
+
+    } catch (err) {
+
+      console.error(
+        "🔥 Preview route error:",
+        err
+      );
 
       return res.status(500).json({
         ok: false,
-        error: result.error || "Engine failed"
+        error: err.message
       });
     }
-
-    // --------------------------------------------
-    // RETURN PREVIEW ONLY
-    // --------------------------------------------
-return res.json({
-
-  ok: true,
-
-  preview: true,
-
-  fieldId,
-
-  // --------------------------------------------
-  // SUPPORT BOTH ENGINE OUTPUT FORMATS
-  // --------------------------------------------
-  readiness:
-    result.readiness ??
-    result.readinessR,
-
-  readinessR:
-    result.readinessR ??
-    result.readiness,
-
-  wetness:
-    result.wetness ??
-    result.wetnessR,
-
-  wetnessR:
-    result.wetnessR ??
-    result.wetness,
-
-  baseReadiness:
-    result.baseReadiness,
-
-  surfacePenalty:
-    result.surfacePenalty,
-
-  storageFinal:
-    result.storageFinal,
-
-  surfaceStorageFinal:
-    result.surfaceStorageFinal,
-
-  storageForReadiness:
-    result.storageForReadiness,
-
-  storagePhysFinal:
-    result.storagePhysFinal,
-
-  readinessCreditIn:
-    result.readinessCreditIn,
-
-  factors:
-    result.factors,
-
-  trace:
-    result.trace || [],
-
-  rows:
-    result.rows || [],
-
-  debug: {
-    source: "preview-readiness",
-
-    seedMode,
-
-    soilWetness:
-      field.soilWetness,
-
-    drainageIndex:
-      field.drainageIndex,
-
-    returnedReadiness:
-      result.readiness,
-
-    returnedReadinessR:
-      result.readinessR,
-
-    returnedWetness:
-      result.wetness,
-
-    returnedWetnessR:
-      result.wetnessR
   }
-});
+);
 
 // ============================================
 // FULL SYSTEM RUN
@@ -547,7 +676,8 @@ app.get("/run", async (req, res) => {
       "🚜 STEP 2: Running readiness engine..."
     );
 
-    const results = await run();
+    const results =
+      await run();
 
     res.json({
       ok: true,
