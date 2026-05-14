@@ -76,9 +76,6 @@ function mapFactors(
   const drainPoor =
     snap01(drainPoorRaw);
 
-  // --------------------------------------------
-  // OPEN-METEO SOIL MOISTURE NORMALIZATION
-  // --------------------------------------------
   const smN =
     sm010 === null ||
     sm010 === undefined ||
@@ -90,32 +87,70 @@ function mapFactors(
           1
         );
 
-  // --------------------------------------------
-  // STATIC FIELD CHARACTERISTICS
-  // --------------------------------------------
+  // ============================================
+  // MUCH STRONGER FIELD DIFFERENTIATION
+  // ============================================
 
-  // Higher = slower drying
+  // --------------------------------------------
+  // DRYING SPEED
+  //
+  // LOW values:
+  // dries fast
+  //
+  // HIGH values:
+  // dries slow
+  // --------------------------------------------
   const dryMult =
-    1.2 -
-    0.35 * soilHold -
-    0.4 * drainPoor;
+    clamp(
+      1.45 -
+      0.65 * soilHold -
+      0.75 * drainPoor,
+      0.18,
+      1.55
+    );
 
-  // Field storage capacity
+  // --------------------------------------------
+  // STORAGE CAPACITY
+  //
+  // Sandy/tiled:
+  // low storage
+  //
+  // Heavy/wet:
+  // high storage
+  // --------------------------------------------
   const SmaxBase =
-    3.0 +
-    1.0 * soilHold +
-    1.0 * drainPoor;
+    2.2 +
+    2.2 * soilHold +
+    2.4 * drainPoor;
 
   const Smax =
-    clamp(SmaxBase, 3.0, 5.0);
+    clamp(SmaxBase, 2.0, 7.0);
 
-  // Base infiltration potential
-  // Sandy/tiled fields higher
-  // Tight/wet fields lower
+  // --------------------------------------------
+  // BASE INFILTRATION
+  //
+  // Sandy/tiled:
+  // aggressive infiltration
+  //
+  // Tight/wet:
+  // slow infiltration
+  // --------------------------------------------
   const infilBase =
-    1.15 -
-    0.30 * soilHold -
-    0.35 * drainPoor;
+    1.35 -
+    0.55 * soilHold -
+    0.60 * drainPoor;
+
+  console.log("🧪 MAP FACTORS:", {
+    soilWetness0_100,
+    drainageIndex0_100,
+
+    soilHold: round(soilHold),
+    drainPoor: round(drainPoor),
+
+    dryMult: round(dryMult),
+    Smax: round(Smax),
+    infilBase: round(infilBase)
+  });
 
   return {
     soilHold,
@@ -129,7 +164,7 @@ function mapFactors(
     SmaxBase,
 
     infilBase: round(
-      clamp(infilBase, 0.35, 1.25)
+      clamp(infilBase, 0.15, 1.5)
     )
   };
 }
