@@ -6,6 +6,8 @@
 // Stabilized intraday drydown
 //
 // UPDATED:
+// ✅ Fixes slider value 0 being ignored
+// ✅ Uses field.soilWetness / field.drainageIndex safely
 // ✅ Faster drydown conversion from DryPwr
 // ✅ Keeps intraday stabilization
 // ✅ Adds audit values for before/add/loss/floor/after
@@ -41,6 +43,16 @@ function round(v, d = 2) {
   return Math.round(Number(v) * p) / p;
 }
 
+function readFieldNumber(field, key, fallback) {
+  const n = Number(field?.[key]);
+
+  if (Number.isFinite(n)) {
+    return n;
+  }
+
+  return fallback;
+}
+
 function getDayFraction(row) {
   if (!row || row.isTodayLive !== true) {
     return 1;
@@ -67,11 +79,7 @@ function getIntradayScale(row, dayFraction) {
   );
 }
 
-// Faster drydown than prior 0.55.
-// This is the main conversion from DryPwr into soil storage loss.
 const LOSS_SCALE = 0.70;
-
-// Small boost to surface drydown so surface wetness does not stay too sticky.
 const SURFACE_LOSS_SCALE = 1.08;
 
 function runSoilModel(weatherRows, field, opts = {}) {
@@ -82,11 +90,23 @@ function runSoilModel(weatherRows, field, opts = {}) {
     return null;
   }
 
-  const soilWetness =
-    Number(field?.soilWetness || 50);
+  const soilWetness = clamp(
+    readFieldNumber(field, "soilWetness", 50),
+    0,
+    100
+  );
 
-  const drainageIndex =
-    Number(field?.drainageIndex || 50);
+  const drainageIndex = clamp(
+    readFieldNumber(field, "drainageIndex", 50),
+    0,
+    100
+  );
+
+  console.log("🧪 SOIL MODEL ACTIVE VALUES:", {
+    fieldId: field?.id || field?.fieldId || null,
+    soilWetness,
+    drainageIndex
+  });
 
   const last =
     weatherRows[weatherRows.length - 1];
