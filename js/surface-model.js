@@ -4,12 +4,12 @@
 // Surface wetness logic for FarmVista model
 //
 // UPDATED:
-// ✅ Less aggressive instant saturation
-// ✅ Better ponding realism
-// ✅ Better dry soil infiltration behavior
-// ✅ Better saturated surface persistence
-// ✅ Improved handoff physics
-// ✅ Better compatibility with live intraday rows
+// ✅ Light rain now creates a meaningful surface response
+// ✅ Dry fields react properly to overnight rainfall
+// ✅ Surface wetness dries rapidly with hot/windy conditions
+// ✅ Better separation between surface wetness and soil storage
+// ✅ Faster operational recovery after sunrise
+// ✅ Improved realism for spring tillage / planting conditions
 // ============================================
 
 // --------------------------------------------
@@ -34,26 +34,31 @@ const TUNE = {
   // --------------------------------------------
   SURFACE_CAP_IN: 0.90,
 
-  // Old value was 2.2 (very aggressive).
-  // New value allows more realistic rain partitioning.
+  // --------------------------------------------
+  // SURFACE RAIN CAPTURE
+  // --------------------------------------------
   SURFACE_RAIN_CAPTURE: 0.95,
 
   // --------------------------------------------
   // READINESS PENALTY
+  // Stronger early penalty from light surface wetness
   // --------------------------------------------
-  SURFACE_PENALTY_MAX: 55,
-  SURFACE_PENALTY_EXP: 0.92,
+  SURFACE_PENALTY_MAX: 72,
+  SURFACE_PENALTY_EXP: 0.78,
 
   // --------------------------------------------
   // SURFACE DRYDOWN
+  // Aggressive atmospheric recovery
   // --------------------------------------------
   SURFACE_DRY_BASE: 0.01,
-  SURFACE_DRY_DRYPWR_W: 0.22,
-  SURFACE_DRY_ET0_W: 0.14,
-  SURFACE_DRY_WIND_W: 0.06,
-  SURFACE_DRY_SUN_W: 0.06,
-  SURFACE_DRY_VPD_W: 0.05,
-  SURFACE_DRY_CLOUD_W: 0.08,
+
+  SURFACE_DRY_DRYPWR_W: 0.34,
+  SURFACE_DRY_ET0_W: 0.18,
+  SURFACE_DRY_WIND_W: 0.10,
+  SURFACE_DRY_SUN_W: 0.10,
+  SURFACE_DRY_VPD_W: 0.09,
+
+  SURFACE_DRY_CLOUD_W: 0.06,
 
   // --------------------------------------------
   // SURFACE → SOIL HANDOFF
@@ -89,26 +94,43 @@ function surfaceStorageAddFromRain(rainIn) {
   }
 
   // --------------------------------------------
-  // More realistic ponding response:
+  // GOAL:
   //
-  // Small rains:
-  // mostly infiltrate
+  // Small overnight rains should visibly impact
+  // surface readiness even on very dry fields.
   //
-  // Larger rains:
-  // increasingly pond
+  // EXAMPLE TARGET:
+  // 0.15" rain on dry field:
+  // readiness shock into 80s
+  //
+  // BUT:
+  // hot/windy conditions should recover rapidly.
   // --------------------------------------------
   let capture;
 
   if (rain <= 0.10) {
-    capture = rain * 0.35;
+
+    // very light rains
+    capture = rain * 1.10;
+
   } else if (rain <= 0.35) {
-    capture = rain * 0.55;
+
+    // light operationally meaningful rains
+    capture = rain * 1.45;
+
   } else if (rain <= 1.0) {
-    capture = rain * 0.75;
-  } else {
+
+    // moderate rainfall
     capture =
-      0.75 +
-      (rain - 1.0) * 0.12;
+      0.50 +
+      (rain - 0.35) * 0.78;
+
+  } else {
+
+    // heavy rainfall
+    capture =
+      1.00 +
+      (rain - 1.0) * 0.10;
   }
 
   capture *= TUNE.SURFACE_RAIN_CAPTURE;
@@ -147,6 +169,13 @@ function surfaceDrydownInchesPerDay(parts, et0N) {
   const etN =
     clamp(Number(et0N || 0), 0, 1);
 
+  // --------------------------------------------
+  // Aggressive atmospheric drying
+  //
+  // Allows:
+  // wet sunrise
+  // → operational by afternoon
+  // --------------------------------------------
   const loss =
     TUNE.SURFACE_DRY_BASE +
     TUNE.SURFACE_DRY_DRYPWR_W * dryPwr +
@@ -214,10 +243,10 @@ function surfaceToStorageFrac(row) {
 
   // --------------------------------------------
   // Dry sunny days:
-  // surface water infiltrates rapidly.
+  // surface infiltrates faster.
   //
-  // Wet evening conditions:
-  // slower handoff.
+  // Evening wetness:
+  // slower infiltration transfer.
   // --------------------------------------------
   const frac =
     TUNE.SURFACE_TO_STORAGE_BASE +
