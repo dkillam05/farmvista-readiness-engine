@@ -324,11 +324,17 @@ function runReadinessEngine(
     trace:
       model.trace,
 
-    // --------------------------------------------
-    // CURRENT ROWS ONLY
-    // --------------------------------------------
-    rows:
-      currentRows,
+// --------------------------------------------
+// CURRENT + FORECAST ROWS
+// IMPORTANT:
+// Needed so Firestore daily debug docs
+// continue rolling future forecast days
+// forward every run.
+// --------------------------------------------
+rows: [
+  ...currentRows,
+  ...forecastRows
+],
 
     // --------------------------------------------
     // DEBUG
