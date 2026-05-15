@@ -10,6 +10,7 @@
 // ✅ Preserve runoff/saturation diagnostics
 // ✅ Keep debug docs aligned with live model
 // ✅ Added ETA diagnostics support
+// ✅ Added ETA DAY BUCKET support
 // ============================================
 
 const admin = require("firebase-admin");
@@ -402,24 +403,10 @@ async function writeDailyDebug({
     // --------------------------------------------
     const etaDebug = {
 
-      drydownPointsPerHour:
-        safeNum(
-          eta?.drydownPointsPerHour
-        ),
-
-      projectionHours:
-        safeNum(
-          eta?.projectionHours
-        ),
-
-      readinessGain:
-        safeNum(
-          eta?.readinessGain
-        ),
-
-      projectedReadiness:
-        safeNum(
-          eta?.projectedReadiness
+      source:
+        safeStr(
+          eta?.source,
+          "forecast_projection"
         ),
 
       currentReadiness:
@@ -427,11 +414,32 @@ async function writeDailyDebug({
           eta?.currentReadiness
         ),
 
-      etaSource:
-        safeStr(
-          eta?.source,
-          "forecast_projection"
+      projectedReadiness:
+        safeNum(
+          eta?.projectedReadiness
+        ),
+
+      readinessGain:
+        safeNum(
+          eta?.readinessGain
+        ),
+
+      projectionHours:
+        safeNum(
+          eta?.projectionHours
+        ),
+
+      drydownPointsPerHour:
+        safeNum(
+          eta?.drydownPointsPerHour
+        ),
+
+      etaDays:
+        Array.isArray(
+          eta?.etaDays
         )
+          ? eta.etaDays
+          : []
     };
 
     // --------------------------------------------
