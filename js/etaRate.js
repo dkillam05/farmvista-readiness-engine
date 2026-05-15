@@ -4,7 +4,7 @@
 // Centralized ETA drydown engine
 //
 // GOAL:
-// Build DAILY forecast drying buckets
+// Build DAILY forecast readiness-change buckets
 // using SAME readiness physics:
 //
 // forecast rows
@@ -19,6 +19,7 @@
 // ✅ Produces DAILY ETA buckets
 // ✅ Day 1 = remaining today only
 // ✅ Days 2-7 = full forecast days
+// ✅ Allows negative readiness gain on rain/wet days
 //
 // ❌ No UI logic
 // ❌ No operational thresholds
@@ -67,27 +68,25 @@ function normalizeForecastRow(row, idx = 0) {
 
   // --------------------------------------------
   // ETA RULE:
-  // forecast uses Open-Meteo rain
+  // Future forecast uses Open-Meteo rain.
+  // MRMS is for history/current only.
   // --------------------------------------------
   const forecastRain =
     safeNum(r.rainOpenMeteoIn) ??
     safeNum(r.rainForecastIn) ??
+    safeNum(r.forecastRainIn) ??
     safeNum(r.rainIn) ??
     0;
 
   r.rainIn = forecastRain;
-
   r.rainInAdj = forecastRain;
-
-  r.rainSource =
-    "open-meteo-forecast";
+  r.rainSource = "open-meteo-forecast";
 
   // --------------------------------------------
   // DAY 1:
   // remaining today only
   // --------------------------------------------
   if (idx === 0) {
-
     const nowHour =
       new Date().getHours();
 
@@ -99,18 +98,13 @@ function normalizeForecastRow(row, idx = 0) {
       );
 
     r.isTodayLive = true;
-
-    r.hoursCount =
-      remainingHours;
-
+    r.hoursCount = remainingHours;
   } else {
-
     // --------------------------------------------
     // FUTURE DAYS:
-    // full 24h
+    // full 24h buckets
     // --------------------------------------------
     r.isTodayLive = false;
-
     r.hoursCount = 24;
   }
 
@@ -124,17 +118,10 @@ function calculateEtaRate({
   currentReadiness = null,
   currentStorage = null,
   currentSurface = null,
-
   forecastRows = [],
-
   fieldDoc = null,
-
   globalStorageMult = 1.0
 }) {
-
-  // --------------------------------------------
-  // NORMALIZE FORECAST
-  // --------------------------------------------
   const rows =
     Array.isArray(forecastRows)
       ? forecastRows
@@ -142,36 +129,25 @@ function calculateEtaRate({
             r &&
             r.dateISO
           )
-          .map(
-            (
+          .slice(0, 7)
+          .map((r, idx) =>
+            normalizeForecastRow(
               r,
               idx
-            ) =>
-              normalizeForecastRow(
-                r,
-                idx
-              )
+            )
           )
       : [];
 
   if (!rows.length) {
-
     return {
       ok: false,
-
-      source:
-        "forecast_projection",
-
-      reason:
-        "no_forecast_rows",
-
-      etaDays: []
+      source: "forecast_projection",
+      reason: "no_forecast_rows",
+      etaDays: [],
+      drydownPointsPerHour: null
     };
   }
 
-  // --------------------------------------------
-  // START STATE
-  // --------------------------------------------
   const startReadiness =
     safeNum(currentReadiness);
 
@@ -179,32 +155,24 @@ function calculateEtaRate({
     safeNum(currentStorage);
 
   let rollingSurface =
-    safeNum(
-      currentSurface,
-      0
-    );
+    safeNum(currentSurface, 0);
 
   if (
     startReadiness === null ||
     rollingStorage === null
   ) {
-
     return {
       ok: false,
-
-      source:
-        "forecast_projection",
-
-      reason:
-        "missing_current_state",
-
-      etaDays: []
+      source: "forecast_projection",
+      reason: "missing_current_state",
+      currentReadiness: startReadiness,
+      currentStorage: rollingStorage,
+      currentSurface: rollingSurface,
+      etaDays: [],
+      drydownPointsPerHour: null
     };
   }
 
-  // --------------------------------------------
-  // ETA DAYS
-  // --------------------------------------------
   const etaDays = [];
 
   let priorReadiness =
@@ -213,16 +181,20 @@ function calculateEtaRate({
   // ============================================
   // LOOP FORECAST DAYS
   // ============================================
-  for (
-    let i = 0;
-    i < rows.length;
-    i++
-  ) {
-
+  for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
 
+    const storageStart =
+      rollingStorage;
+
+    const surfaceStart =
+      rollingSurface;
+
+    const readinessStart =
+      priorReadiness;
+
     // --------------------------------------------
-    // RUN MODEL FOR SINGLE DAY
+    // Run ONE day using same soil model
     // --------------------------------------------
     const model =
       runSoilModel(
@@ -230,24 +202,31 @@ function calculateEtaRate({
         fieldDoc || {},
         {
           seed: {
-            mode:
-              "rolling",
-
-            storage:
-              rollingStorage,
-
-            surface:
-              rollingSurface
+            mode: "rolling",
+            storage: rollingStorage,
+            surface: rollingSurface
           }
         }
       );
 
     if (!model) {
+      etaDays.push({
+        day: i + 1,
+        dateISO: row.dateISO,
+        ok: false,
+        reason: "soil_model_failed",
+        hours: safeNum(row.hoursCount, 24),
+        readinessStart: round(readinessStart, 4),
+        readinessEnd: round(readinessStart, 4),
+        readinessGain: 0,
+        drydownPointsPerHour: 0
+      });
+
       continue;
     }
 
     // --------------------------------------------
-    // READINESS
+    // Same readiness calculation
     // --------------------------------------------
     const projected =
       calculateReadiness(
@@ -258,42 +237,61 @@ function calculateEtaRate({
       );
 
     if (!projected) {
+      etaDays.push({
+        day: i + 1,
+        dateISO: row.dateISO,
+        ok: false,
+        reason: "readiness_failed",
+        hours: safeNum(row.hoursCount, 24),
+        readinessStart: round(readinessStart, 4),
+        readinessEnd: round(readinessStart, 4),
+        readinessGain: 0,
+        drydownPointsPerHour: 0
+      });
+
       continue;
     }
 
     const projectedReadiness =
-      safeNum(
-        projected.readiness
-      );
+      safeNum(projected.readiness);
 
-    if (
-      projectedReadiness === null
-    ) {
+    if (projectedReadiness === null) {
+      etaDays.push({
+        day: i + 1,
+        dateISO: row.dateISO,
+        ok: false,
+        reason: "projected_readiness_missing",
+        hours: safeNum(row.hoursCount, 24),
+        readinessStart: round(readinessStart, 4),
+        readinessEnd: round(readinessStart, 4),
+        readinessGain: 0,
+        drydownPointsPerHour: 0
+      });
+
       continue;
     }
 
+    const hours =
+      safeNum(row.hoursCount, 24);
+
     // --------------------------------------------
-    // DAILY GAIN
+    // IMPORTANT:
+    // This can be POSITIVE or NEGATIVE.
+    //
+    // Positive = drying / gaining readiness
+    // Negative = rain/wet forecast reducing readiness
     // --------------------------------------------
     const readinessGain =
       projectedReadiness -
-      priorReadiness;
+      readinessStart;
 
-    const hours =
-      safeNum(
-        row.hoursCount,
-        24
-      );
-
-    const pointsPerHour =
+    const drydownPointsPerHour =
       hours > 0
         ? readinessGain / hours
         : 0;
 
-    // --------------------------------------------
-    // SAVE DAY
-    // --------------------------------------------
     etaDays.push({
+      ok: true,
 
       day:
         i + 1,
@@ -305,69 +303,49 @@ function calculateEtaRate({
         round(hours, 2),
 
       readinessStart:
-        round(
-          priorReadiness,
-          4
-        ),
+        round(readinessStart, 4),
 
       readinessEnd:
-        round(
-          projectedReadiness,
-          4
-        ),
+        round(projectedReadiness, 4),
 
       readinessGain:
-        round(
-          readinessGain,
-          4
-        ),
+        round(readinessGain, 4),
 
       drydownPointsPerHour:
-        round(
-          pointsPerHour,
-          6
-        ),
+        round(drydownPointsPerHour, 6),
 
       storageStart:
-        round(
-          rollingStorage,
-          4
-        ),
+        round(storageStart, 4),
 
       storageEnd:
-        round(
-          model.storageFinal,
-          4
-        ),
+        round(model.storageFinal, 4),
 
       surfaceStart:
-        round(
-          rollingSurface,
-          4
-        ),
+        round(surfaceStart, 4),
 
       surfaceEnd:
-        round(
-          model.surfaceFinal,
-          4
-        ),
+        round(model.surfaceFinal, 4),
+
+      storageForReadiness:
+        round(projected.storageForReadiness, 4),
+
+      surfacePenalty:
+        round(projected.surfacePenalty, 4),
 
       rainIn:
-        round(
-          row.rainInAdj ??
-          row.rainIn ??
-          0,
-          4
-        ),
+        round(row.rainInAdj ?? row.rainIn ?? 0, 4),
 
       rainSource:
-        row.rainSource ||
+        row.rainSource || "open-meteo-forecast",
 
-        "open-meteo-forecast"
+      trace:
+        Array.isArray(model.trace)
+          ? model.trace
+          : []
     });
 
     // --------------------------------------------
-    // ROLL STATE FORWARD
+    // Roll state forward
     // --------------------------------------------
     priorReadiness =
       projectedReadiness;
@@ -386,91 +364,57 @@ function calculateEtaRate({
   }
 
   // --------------------------------------------
-  // FINAL SUMMARY
+  // SUMMARY
   // --------------------------------------------
   const totalHours =
     etaDays.reduce(
-      (
-        sum,
-        d
-      ) =>
-        sum +
-        Number(
-          d.hours || 0
-        ),
+      (sum, d) =>
+        sum + Number(d.hours || 0),
       0
     );
 
   const totalGain =
     etaDays.reduce(
-      (
-        sum,
-        d
-      ) =>
-        sum +
-        Number(
-          d.readinessGain || 0
-        ),
+      (sum, d) =>
+        sum + Number(d.readinessGain || 0),
       0
     );
 
   const avgDrydownPerHour =
     totalHours > 0
-      ? totalGain /
-        totalHours
+      ? totalGain / totalHours
       : 0;
 
-  // --------------------------------------------
-  // RETURN
-  // --------------------------------------------
   return {
-
     ok: true,
-
-    source:
-      "forecast_projection",
+    source: "forecast_projection",
 
     currentReadiness:
-      round(
-        startReadiness,
-        4
-      ),
+      round(startReadiness, 4),
 
     projectedReadiness:
-      round(
-        priorReadiness,
-        4
-      ),
+      round(priorReadiness, 4),
 
     readinessGain:
-      round(
-        totalGain,
-        4
-      ),
+      round(totalGain, 4),
 
     projectionHours:
-      round(
-        totalHours,
-        2
-      ),
+      round(totalHours, 2),
 
     drydownPointsPerHour:
-      round(
-        avgDrydownPerHour,
-        6
-      ),
+      round(avgDrydownPerHour, 6),
 
     currentStorage:
-      round(
-        currentStorage,
-        4
-      ),
+      round(currentStorage, 4),
 
     currentSurface:
-      round(
-        currentSurface,
-        4
-      ),
+      round(currentSurface, 4),
+
+    projectedStorageFinal:
+      round(rollingStorage, 4),
+
+    projectedSurfaceFinal:
+      round(rollingSurface, 4),
 
     etaDays,
 
