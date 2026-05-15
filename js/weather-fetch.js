@@ -82,7 +82,7 @@ async function fetchWeather(lat, lng) {
     `&longitude=${lng}` +
     `&timezone=auto` +
     `&past_days=30` +
-    `&forecast_days=7` +
+    `&forecast_days=8` +
     `&temperature_unit=fahrenheit` +
     `&wind_speed_unit=mph` +
     `&precipitation_unit=inch` +
