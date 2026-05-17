@@ -6,12 +6,11 @@
 // Stabilized intraday drydown
 //
 // UPDATED:
-// ✅ Fixes slider value 0 being ignored
-// ✅ Uses field.soilWetness / field.drainageIndex safely
-// ✅ Faster drydown conversion from DryPwr
-// ✅ Keeps intraday stabilization
-// ✅ Adds audit values for before/add/loss/floor/after
-// ✅ Does not change storage tank size logic
+// ✅ Slower operational rebound after rainfall
+// ✅ Morning recovery slowed substantially
+// ✅ Surface wetness persists longer
+// ✅ Larger rain events now linger longer operationally
+// ✅ Keeps existing storage tank sizing logic
 // ============================================
 
 const { calcDryingPower } = require("./drying-power");
@@ -72,15 +71,25 @@ function getIntradayScale(row, dayFraction) {
     return 1;
   }
 
+  // --------------------------------------------
+  // UPDATED:
+  // Slower morning recovery after rainfall.
+  // Prevents unrealistically fast rebound by noon.
+  // --------------------------------------------
   return clamp(
-    0.65 + dayFraction * 0.35,
-    0.65,
+    0.40 + dayFraction * 0.60,
+    0.40,
     1
   );
 }
 
-const LOSS_SCALE = 0.70;
-const SURFACE_LOSS_SCALE = 1.08;
+// --------------------------------------------
+// UPDATED:
+// Slower overall storage drying.
+// Slower surface drying.
+// --------------------------------------------
+const LOSS_SCALE = 0.52;
+const SURFACE_LOSS_SCALE = 0.82;
 
 function runSoilModel(weatherRows, field, opts = {}) {
   if (
