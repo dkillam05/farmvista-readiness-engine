@@ -5,14 +5,16 @@
 // final field readiness score
 //
 // UPDATED:
-// ✅ Stronger slider influence
-// ✅ Soil wetness now materially affects readiness
-// ✅ Drainage index now materially affects readiness
-// ✅ Preserves weather-driven model behavior
-// ✅ Keeps same payload structure/UI contract
+// ✅ Added recent MRMS rainfall operational shock
+// ✅ Very recent rain now suppresses readiness harder
+// ✅ Standing-water situations handled more realistically
+// ✅ Keeps existing readiness structure intact
 // ============================================
 
-const { surfacePenaltyFromStorage } = require("./surface-model");
+const {
+  surfacePenaltyFromStorage,
+  recentRainShockPenalty
+} = require("./surface-model");
 
 // --------------------------------------------
 // HELPERS
@@ -42,6 +44,7 @@ const SMAX_MID = 4.0;
 const REV_POINTS_MAX = 20;
 
 function signedCreditInchesFromSmax(Smax) {
+
   const s = clamp(
     Number(Smax),
     SMAX_MIN,
@@ -61,10 +64,6 @@ function signedCreditInchesFromSmax(Smax) {
 
 // --------------------------------------------
 // SLIDER BIAS
-//
-// 50 = neutral
-// dry/well-drained => boosts readiness
-// wet/poor-drainage => lowers readiness
 // --------------------------------------------
 function sliderBiasPoints(factors = {}) {
 
@@ -82,28 +81,18 @@ function sliderBiasPoints(factors = {}) {
       1
     );
 
-  // --------------------------------------------
-  // Convert to centered values
-  // --------------------------------------------
   const soilCentered =
     (soilHold - 0.5) * 2;
 
   const drainCentered =
     (drainPoor - 0.5) * 2;
 
-  // --------------------------------------------
-  // Wet soil hurts more
-  // than drainage alone
-  // --------------------------------------------
   const soilPts =
     soilCentered * -18;
 
   const drainPts =
     drainCentered * -12;
 
-  // --------------------------------------------
-  // Combined cap
-  // --------------------------------------------
   return clamp(
     soilPts + drainPts,
     -25,
@@ -150,7 +139,7 @@ function calculateReadiness(
       : 1.0;
 
   // --------------------------------------------
-  // Existing model credit
+  // STORAGE CREDIT
   // --------------------------------------------
   const readinessCreditIn =
     signedCreditInchesFromSmax(
@@ -158,7 +147,7 @@ function calculateReadiness(
     );
 
   // --------------------------------------------
-  // Existing storage logic
+  // STORAGE FOR READINESS
   // --------------------------------------------
   const storageForReadiness =
     clamp(
@@ -171,7 +160,7 @@ function calculateReadiness(
     );
 
   // --------------------------------------------
-  // Base wetness from storage
+  // BASE WETNESS
   // --------------------------------------------
   const baseWetness =
     Smax > 0
@@ -193,8 +182,7 @@ function calculateReadiness(
     );
 
   // --------------------------------------------
-  // NEW:
-  // Slider influence
+  // SLIDER BIAS
   // --------------------------------------------
   const sliderBias =
     sliderBiasPoints(factors);
@@ -207,17 +195,50 @@ function calculateReadiness(
     );
 
   // --------------------------------------------
-  // Surface penalty
+  // SURFACE PENALTY
   // --------------------------------------------
   const surfacePenalty =
     surfacePenaltyFromStorage(
       surfaceFinal
     );
 
+  // --------------------------------------------
+  // RECENT RAIN SHOCK
+  //
+  // Strongest:
+  // - last 3h
+  //
+  // Medium:
+  // - last 6h
+  //
+  // Light:
+  // - last 12h
+  //
+  // This handles:
+  // - standing water
+  // - active rain
+  // - freshly wet conditions
+  // --------------------------------------------
+  const recentRainPenalty =
+    recentRainShockPenalty({
+      recentRain3hIn:
+        Number(opts.recentRain3hIn || 0),
+
+      recentRain6hIn:
+        Number(opts.recentRain6hIn || 0),
+
+      recentRain12hIn:
+        Number(opts.recentRain12hIn || 0)
+    });
+
+  // --------------------------------------------
+  // FINAL READINESS
+  // --------------------------------------------
   const readiness =
     clamp(
       baseReadiness -
-        surfacePenalty,
+        surfacePenalty -
+        recentRainPenalty,
       0,
       100
     );
@@ -246,6 +267,12 @@ function calculateReadiness(
     surfacePenalty,
     surfacePenaltyR:
       Math.round(surfacePenalty),
+
+    recentRainPenalty:
+      round(recentRainPenalty, 4),
+
+    recentRainPenaltyR:
+      Math.round(recentRainPenalty),
 
     storageFinal:
       round(storageFinal, 4),
