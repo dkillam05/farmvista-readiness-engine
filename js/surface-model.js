@@ -4,12 +4,11 @@
 // Surface wetness logic for FarmVista model
 //
 // UPDATED:
-// ✅ Rain creates stronger operational readiness drop
-// ✅ Slower rebound after rainfall
-// ✅ Moderate rain causes operational delay
-// ✅ Prevents catastrophic readiness collapse
-// ✅ 0.50" rain on fit ground should generally
-//    land closer to ~75-82 readiness
+// ✅ Corrected surface storage scaling
+// ✅ Prevents readiness collapsing near zero
+// ✅ Moderate rains now create realistic operational drag
+// ✅ Slower rebound retained
+// ✅ Better alignment with existing historical surface traces
 // ============================================
 
 // --------------------------------------------
@@ -32,8 +31,16 @@ const TUNE = {
 
   // --------------------------------------------
   // SURFACE STORAGE CAPACITY
+  //
+  // IMPORTANT:
+  // Existing model traces operate on an
+  // approximate 0–10 scale.
+  //
+  // Prior rebuild accidentally reduced cap
+  // to ~1, causing nearly all fields to hit
+  // maximum readiness penalty.
   // --------------------------------------------
-  SURFACE_CAP_IN: 1.10,
+  SURFACE_CAP_IN: 10.0,
 
   // --------------------------------------------
   // SURFACE RAIN CAPTURE
@@ -43,9 +50,10 @@ const TUNE = {
   // --------------------------------------------
   // READINESS PENALTY
   //
-  // Reduced substantially from prior version.
-  // Previous values caused too many fields
-  // to collapse near zero readiness.
+  // Moderate operational penalty.
+  // Goal:
+  // 0.5" rain on fit field ≈ 75-82 readiness
+  // instead of collapsing to zero.
   // --------------------------------------------
   SURFACE_PENALTY_MAX: 42,
   SURFACE_PENALTY_EXP: 1.08,
@@ -53,8 +61,7 @@ const TUNE = {
   // --------------------------------------------
   // SURFACE DRYDOWN
   //
-  // Keeps slower operational recovery
-  // without becoming unrealistic.
+  // Slower rebound retained.
   // --------------------------------------------
   SURFACE_DRY_BASE: 0.006,
 
@@ -67,7 +74,7 @@ const TUNE = {
   SURFACE_DRY_CLOUD_W: 0.075,
 
   // --------------------------------------------
-  // RAIN MEMORY DRYDOWN THROTTLE
+  // RAIN MEMORY THROTTLE
   // --------------------------------------------
   SURFACE_DRY_THROTTLE_START_FRAC: 0.18,
   SURFACE_DRY_THROTTLE_MAX_REDUCTION: 0.46,
@@ -82,18 +89,13 @@ const TUNE = {
   SURFACE_TO_STORAGE_MAX_FRAC: 0.34,
 
   // --------------------------------------------
-  // SURFACE WETNESS SLOWS SOIL DRYING
-  //
-  // Reduced from previous aggressive version.
+  // SURFACE HOLDING REDUCES DRYING
   // --------------------------------------------
   SURFACE_WET_HOLD_START_FRAC: 0.10,
   SURFACE_WET_HOLD_MAX_REDUCTION: 0.58,
 
   // --------------------------------------------
   // SURFACE-DRIVEN STORAGE FLOOR
-  //
-  // Reduced from prior version to prevent
-  // excessive lingering penalties.
   // --------------------------------------------
   SURFACE_STORAGE_FLOOR_W: 0.26,
   SURFACE_STORAGE_FLOOR_CAP_FRAC: 0.30
@@ -103,7 +105,9 @@ const TUNE = {
 // SURFACE ADD FROM RAIN
 // --------------------------------------------
 function surfaceStorageAddFromRain(rainIn) {
-  const rain = Math.max(0, Number(rainIn || 0));
+
+  const rain =
+    Math.max(0, Number(rainIn || 0));
 
   if (!Number.isFinite(rain) || rain <= 0) {
     return 0;
@@ -113,33 +117,28 @@ function surfaceStorageAddFromRain(rainIn) {
 
   if (rain <= 0.10) {
 
-    // Very light rain
     capture = rain * 1.25;
 
   } else if (rain <= 0.25) {
 
-    // Light rain still noticeable
     capture =
       0.125 +
       (rain - 0.10) * 1.55;
 
   } else if (rain <= 0.50) {
 
-    // Moderate operational rain
     capture =
       0.36 +
       (rain - 0.25) * 1.25;
 
   } else if (rain <= 1.00) {
 
-    // Moderate-heavy rainfall
     capture =
       0.67 +
       (rain - 0.50) * 0.72;
 
   } else {
 
-    // Heavy rainfall
     capture =
       1.03 +
       (rain - 1.00) * 0.18;
@@ -158,6 +157,7 @@ function surfaceStorageAddFromRain(rainIn) {
 // SURFACE DRYDOWN
 // --------------------------------------------
 function surfaceDrydownInchesPerDay(parts, et0N) {
+
   const p =
     parts && typeof parts === "object"
       ? parts
@@ -205,7 +205,7 @@ function surfacePenaltyFromStorage(surfaceStorage) {
   const cap =
     Math.max(
       1e-6,
-      Number(TUNE.SURFACE_CAP_IN || 1.1)
+      Number(TUNE.SURFACE_CAP_IN || 10)
     );
 
   const frac =
@@ -269,7 +269,7 @@ function surfaceWetHoldDryMult(surfaceStorage) {
   const cap =
     Math.max(
       1e-6,
-      Number(TUNE.SURFACE_CAP_IN || 1.1)
+      Number(TUNE.SURFACE_CAP_IN || 10)
     );
 
   const frac =
