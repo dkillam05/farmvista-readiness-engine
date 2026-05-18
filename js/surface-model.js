@@ -4,11 +4,11 @@
 // Surface wetness logic for FarmVista model
 //
 // UPDATED:
-// ✅ Corrected surface storage scaling
-// ✅ Prevents readiness collapsing near zero
-// ✅ Moderate rains now create realistic operational drag
+// ✅ Keeps existing 0–10 surface wetness scale
+// ✅ Rain surface impact increased by ~10%
+// ✅ Moderate rain pushes readiness harder
 // ✅ Slower rebound retained
-// ✅ Better alignment with existing historical surface traces
+// ✅ Added optional recent-rain shock helpers for future MRMS hourly wiring
 // ============================================
 
 // --------------------------------------------
@@ -28,41 +28,19 @@ function clamp(n, lo, hi) {
 // TUNING
 // --------------------------------------------
 const TUNE = {
-
-  // --------------------------------------------
-  // SURFACE STORAGE CAPACITY
-  //
-  // IMPORTANT:
-  // Existing model traces operate on an
-  // approximate 0–10 scale.
-  //
-  // Prior rebuild accidentally reduced cap
-  // to ~1, causing nearly all fields to hit
-  // maximum readiness penalty.
-  // --------------------------------------------
+  // Existing traces operate on approximate 0–10 scale.
   SURFACE_CAP_IN: 10.0,
 
-  // --------------------------------------------
-  // SURFACE RAIN CAPTURE
-  // --------------------------------------------
-  SURFACE_RAIN_CAPTURE: 1.00,
+  // UPDATED:
+  // Was 1.00. Raised 10% so rain has stronger surface impact.
+  SURFACE_RAIN_CAPTURE: 1.10,
 
-  // --------------------------------------------
-  // READINESS PENALTY
-  //
-  // Moderate operational penalty.
-  // Goal:
-  // 0.5" rain on fit field ≈ 75-82 readiness
-  // instead of collapsing to zero.
-  // --------------------------------------------
-  SURFACE_PENALTY_MAX: 42,
-  SURFACE_PENALTY_EXP: 1.08,
+  // Readiness penalty from surface wetness.
+  // Slightly firm but not catastrophic.
+  SURFACE_PENALTY_MAX: 44,
+  SURFACE_PENALTY_EXP: 1.06,
 
-  // --------------------------------------------
-  // SURFACE DRYDOWN
-  //
-  // Slower rebound retained.
-  // --------------------------------------------
+  // Surface drydown.
   SURFACE_DRY_BASE: 0.006,
 
   SURFACE_DRY_DRYPWR_W: 0.22,
@@ -73,31 +51,26 @@ const TUNE = {
 
   SURFACE_DRY_CLOUD_W: 0.075,
 
-  // --------------------------------------------
-  // RAIN MEMORY THROTTLE
-  // --------------------------------------------
-  SURFACE_DRY_THROTTLE_START_FRAC: 0.18,
-  SURFACE_DRY_THROTTLE_MAX_REDUCTION: 0.46,
+  // Recent-rain shock.
+  // These only apply if recent MRMS rain values are wired in later.
+  RECENT_RAIN_3H_TRIGGER_IN: 0.20,
+  RECENT_RAIN_3H_MAX_PENALTY: 14,
+  RECENT_RAIN_6H_MAX_PENALTY: 8,
+  RECENT_RAIN_12H_MAX_PENALTY: 4,
 
-  // --------------------------------------------
-  // SURFACE → SOIL HANDOFF
-  // --------------------------------------------
+  // Surface → soil handoff.
   SURFACE_TO_STORAGE_BASE: 0.075,
   SURFACE_TO_STORAGE_DRY_W: 0.075,
   SURFACE_TO_STORAGE_MORNING_W: 0.035,
   SURFACE_TO_STORAGE_EVENING_W: 0.075,
   SURFACE_TO_STORAGE_MAX_FRAC: 0.34,
 
-  // --------------------------------------------
-  // SURFACE HOLDING REDUCES DRYING
-  // --------------------------------------------
+  // Surface wetness slows soil drying.
   SURFACE_WET_HOLD_START_FRAC: 0.10,
-  SURFACE_WET_HOLD_MAX_REDUCTION: 0.58,
+  SURFACE_WET_HOLD_MAX_REDUCTION: 0.62,
 
-  // --------------------------------------------
-  // SURFACE-DRIVEN STORAGE FLOOR
-  // --------------------------------------------
-  SURFACE_STORAGE_FLOOR_W: 0.26,
+  // Surface-driven storage floor.
+  SURFACE_STORAGE_FLOOR_W: 0.29,
   SURFACE_STORAGE_FLOOR_CAP_FRAC: 0.30
 };
 
@@ -105,7 +78,6 @@ const TUNE = {
 // SURFACE ADD FROM RAIN
 // --------------------------------------------
 function surfaceStorageAddFromRain(rainIn) {
-
   const rain =
     Math.max(0, Number(rainIn || 0));
 
@@ -116,29 +88,20 @@ function surfaceStorageAddFromRain(rainIn) {
   let capture;
 
   if (rain <= 0.10) {
-
     capture = rain * 1.25;
-
   } else if (rain <= 0.25) {
-
     capture =
       0.125 +
       (rain - 0.10) * 1.55;
-
   } else if (rain <= 0.50) {
-
     capture =
       0.36 +
       (rain - 0.25) * 1.25;
-
   } else if (rain <= 1.00) {
-
     capture =
       0.67 +
       (rain - 0.50) * 0.72;
-
   } else {
-
     capture =
       1.03 +
       (rain - 1.00) * 0.18;
@@ -157,7 +120,6 @@ function surfaceStorageAddFromRain(rainIn) {
 // SURFACE DRYDOWN
 // --------------------------------------------
 function surfaceDrydownInchesPerDay(parts, et0N) {
-
   const p =
     parts && typeof parts === "object"
       ? parts
@@ -198,10 +160,91 @@ function surfaceDrydownInchesPerDay(parts, et0N) {
 }
 
 // --------------------------------------------
+// RECENT RAIN SHOCK PENALTY
+//
+// Optional helper.
+// This will only affect readiness once recent MRMS
+// values are passed into readiness calculation later.
+// --------------------------------------------
+function recentRainShockPenalty(row = {}) {
+  const rain3h =
+    clamp(
+      Number(
+        row.recentRain3hIn ??
+          row.mrmsRain3hIn ??
+          row.rainLast3hIn ??
+          0
+      ),
+      0,
+      5
+    );
+
+  const rain6h =
+    clamp(
+      Number(
+        row.recentRain6hIn ??
+          row.mrmsRain6hIn ??
+          row.rainLast6hIn ??
+          0
+      ),
+      0,
+      5
+    );
+
+  const rain12h =
+    clamp(
+      Number(
+        row.recentRain12hIn ??
+          row.mrmsRain12hIn ??
+          row.rainLast12hIn ??
+          0
+      ),
+      0,
+      5
+    );
+
+  let penalty = 0;
+
+  if (rain3h >= TUNE.RECENT_RAIN_3H_TRIGGER_IN) {
+    penalty += clamp(
+      (rain3h / 0.50) *
+        TUNE.RECENT_RAIN_3H_MAX_PENALTY,
+      0,
+      TUNE.RECENT_RAIN_3H_MAX_PENALTY
+    );
+  }
+
+  if (rain6h > rain3h) {
+    penalty += clamp(
+      ((rain6h - rain3h) / 0.50) *
+        TUNE.RECENT_RAIN_6H_MAX_PENALTY,
+      0,
+      TUNE.RECENT_RAIN_6H_MAX_PENALTY
+    );
+  }
+
+  if (rain12h > rain6h) {
+    penalty += clamp(
+      ((rain12h - rain6h) / 0.75) *
+        TUNE.RECENT_RAIN_12H_MAX_PENALTY,
+      0,
+      TUNE.RECENT_RAIN_12H_MAX_PENALTY
+    );
+  }
+
+  return clamp(
+    penalty,
+    0,
+    TUNE.RECENT_RAIN_3H_MAX_PENALTY +
+      TUNE.RECENT_RAIN_6H_MAX_PENALTY +
+      TUNE.RECENT_RAIN_12H_MAX_PENALTY
+  );
+}
+
+// --------------------------------------------
 // SURFACE PENALTY
 // --------------------------------------------
 function surfacePenaltyFromStorage(surfaceStorage) {
-
   const cap =
     Math.max(
       1e-6,
@@ -230,7 +273,6 @@ function surfacePenaltyFromStorage(surfaceStorage) {
 // SURFACE → STORAGE HANDOFF FRACTION
 // --------------------------------------------
 function surfaceToStorageFrac(row) {
-
   const dryPwr =
     clamp(Number(row?.dryPwr || 0), 0, 1);
 
@@ -265,7 +307,6 @@ function surfaceToStorageFrac(row) {
 // SURFACE WETNESS SLOWS SOIL DRYING
 // --------------------------------------------
 function surfaceWetHoldDryMult(surfaceStorage) {
-
   const cap =
     Math.max(
       1e-6,
@@ -324,7 +365,6 @@ function surfaceDrivenStorageFloor(
   surfaceStorage,
   Smax
 ) {
-
   const floorRaw =
     Number(surfaceStorage || 0) *
     Number(
@@ -354,5 +394,6 @@ module.exports = {
   surfacePenaltyFromStorage,
   surfaceToStorageFrac,
   surfaceWetHoldDryMult,
-  surfaceDrivenStorageFloor
+  surfaceDrivenStorageFloor,
+  recentRainShockPenalty
 };
