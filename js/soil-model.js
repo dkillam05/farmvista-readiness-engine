@@ -6,12 +6,12 @@
 // Stabilized intraday drydown
 //
 // UPDATED:
-// ✅ Slower soil drydown
+// ✅ Balanced soil drydown
 // ✅ True current-day hour proration
 // ✅ Forecast days do NOT affect current readiness storage/surface
 // ✅ Slower overnight drying
 // ✅ Reduced surface-to-soil handoff
-// ✅ Surface wetness now lingers longer after repeated rain
+// ✅ Prevents sticky endless surface wetness
 // ✅ Keeps audit values for before/add/loss/floor/after
 // ============================================
 
@@ -73,12 +73,12 @@ function getIntradayScale(row, dayFraction) {
     return 1;
   }
 
-  // This is only a weather-quality modifier.
-  // Actual current-day proration is handled separately by dayFraction.
+  // Keeps overnight drying slower
+  // but allows meaningful daytime drying.
   return clamp(
-    0.42 + dayFraction * 0.38,
-    0.42,
-    0.80
+    0.52 + dayFraction * 0.34,
+    0.52,
+    0.86
   );
 }
 
@@ -109,9 +109,9 @@ function isForecastRow(row, todayLiveISO) {
   return false;
 }
 
-// Slower than previous model.
-const LOSS_SCALE = 0.46;
-const SURFACE_LOSS_SCALE = 0.74;
+// Balanced tuning
+const LOSS_SCALE = 0.58;
+const SURFACE_LOSS_SCALE = 0.88;
 
 function runSoilModel(weatherRows, field, opts = {}) {
   if (
@@ -354,13 +354,13 @@ function runSoilModel(weatherRows, field, opts = {}) {
     const rawSurfaceAdd =
       surfaceStorageAddFromRain(rain);
 
-    // More rain remains operationally visible on the surface.
+    // Balanced operational surface response
     const surfaceAdd =
       rawSurfaceAdd *
       clamp(
-        0.55 + infil.runoffFrac * 0.75,
-        0.35,
-        1.35
+        0.48 + infil.runoffFrac * 0.62,
+        0.30,
+        1.20
       );
 
     surface += surfaceAdd;
@@ -385,11 +385,11 @@ function runSoilModel(weatherRows, field, opts = {}) {
         handoffFracBase *
           clamp(
             infil.infilMult,
-            0.20,
-            1.00
+            0.30,
+            1.05
           ),
         0,
-        0.20
+        0.28
       );
 
     const surfaceToSoil =
