@@ -4,10 +4,10 @@
 // Surface wetness logic for FarmVista model
 //
 // UPDATED:
-// ✅ Surface wetness lingers longer after rain
-// ✅ Slower surface rebound in humid/cloudy/low-sun conditions
-// ✅ Reduced surface-to-soil handoff
-// ✅ Stronger operational penalty from small/moderate surface wetness
+// ✅ Balanced surface persistence
+// ✅ Better operational realism
+// ✅ Prevents sticky endless wetness
+// ✅ Prevents instant rebound
 // ✅ Keeps 0–10 surface wetness scale
 // ============================================
 
@@ -30,24 +30,21 @@ function clamp(n, lo, hi) {
 const TUNE = {
   SURFACE_CAP_IN: 10.0,
 
-  // Slightly stronger rain capture.
-  SURFACE_RAIN_CAPTURE: 1.18,
+  SURFACE_RAIN_CAPTURE: 1.14,
 
-  // Stronger penalty at low/moderate wetness.
-  SURFACE_PENALTY_MAX: 48,
-  SURFACE_PENALTY_EXP: 0.82,
+  SURFACE_PENALTY_MAX: 46,
+  SURFACE_PENALTY_EXP: 0.90,
 
-  // Slower surface drydown.
-  SURFACE_DRY_BASE: 0.002,
+  SURFACE_DRY_BASE: 0.003,
 
-  SURFACE_DRY_DRYPWR_W: 0.105,
-  SURFACE_DRY_ET0_W: 0.055,
-  SURFACE_DRY_WIND_W: 0.025,
-  SURFACE_DRY_SUN_W: 0.030,
-  SURFACE_DRY_VPD_W: 0.025,
+  SURFACE_DRY_DRYPWR_W: 0.145,
+  SURFACE_DRY_ET0_W: 0.060,
+  SURFACE_DRY_WIND_W: 0.040,
+  SURFACE_DRY_SUN_W: 0.045,
+  SURFACE_DRY_VPD_W: 0.030,
 
-  SURFACE_DRY_CLOUD_W: 0.095,
-  SURFACE_DRY_HUMIDITY_HOLD_W: 0.065,
+  SURFACE_DRY_CLOUD_W: 0.085,
+  SURFACE_DRY_HUMIDITY_HOLD_W: 0.045,
 
   // Recent-rain shock helpers.
   RECENT_RAIN_3H_TRIGGER_IN: 0.20,
@@ -56,20 +53,19 @@ const TUNE = {
   RECENT_RAIN_12H_MAX_PENALTY: 4,
 
   // Surface → soil handoff.
-  // Reduced so surface wetness does not disappear instantly.
-  SURFACE_TO_STORAGE_BASE: 0.035,
-  SURFACE_TO_STORAGE_DRY_W: 0.030,
+  SURFACE_TO_STORAGE_BASE: 0.050,
+  SURFACE_TO_STORAGE_DRY_W: 0.050,
   SURFACE_TO_STORAGE_MORNING_W: 0.015,
   SURFACE_TO_STORAGE_EVENING_W: 0.055,
-  SURFACE_TO_STORAGE_MAX_FRAC: 0.18,
+  SURFACE_TO_STORAGE_MAX_FRAC: 0.26,
 
   // Surface wetness slows soil drying.
-  SURFACE_WET_HOLD_START_FRAC: 0.035,
-  SURFACE_WET_HOLD_MAX_REDUCTION: 0.72,
+  SURFACE_WET_HOLD_START_FRAC: 0.05,
+  SURFACE_WET_HOLD_MAX_REDUCTION: 0.64,
 
   // Surface-driven storage floor.
-  SURFACE_STORAGE_FLOOR_W: 0.42,
-  SURFACE_STORAGE_FLOOR_CAP_FRAC: 0.38
+  SURFACE_STORAGE_FLOOR_W: 0.34,
+  SURFACE_STORAGE_FLOOR_CAP_FRAC: 0.34
 };
 
 // --------------------------------------------
@@ -86,23 +82,23 @@ function surfaceStorageAddFromRain(rainIn) {
   let capture;
 
   if (rain <= 0.10) {
-    capture = rain * 1.35;
+    capture = rain * 1.30;
   } else if (rain <= 0.25) {
     capture =
-      0.135 +
-      (rain - 0.10) * 1.75;
+      0.13 +
+      (rain - 0.10) * 1.65;
   } else if (rain <= 0.50) {
     capture =
-      0.3975 +
-      (rain - 0.25) * 1.45;
+      0.38 +
+      (rain - 0.25) * 1.35;
   } else if (rain <= 1.00) {
     capture =
-      0.76 +
-      (rain - 0.50) * 0.92;
+      0.72 +
+      (rain - 0.50) * 0.82;
   } else {
     capture =
-      1.22 +
-      (rain - 1.00) * 0.28;
+      1.13 +
+      (rain - 1.00) * 0.24;
   }
 
   capture *= TUNE.SURFACE_RAIN_CAPTURE;
@@ -170,11 +166,10 @@ function surfaceDrydownInchesPerDay(parts, et0N, surfaceStorage = 0) {
     TUNE.SURFACE_DRY_CLOUD_W * cloudN -
     TUNE.SURFACE_DRY_HUMIDITY_HOLD_W * rhN;
 
-  // If the surface is carrying more water, do not let it fully erase in one weak drying period.
   const wetHoldMult =
     clamp(
-      1 - surfaceFrac * 0.35,
-      0.58,
+      1 - surfaceFrac * 0.22,
+      0.72,
       1
     );
 
@@ -355,7 +350,7 @@ function surfaceWetHoldDryMult(surfaceStorage) {
   const start =
     clamp(
       Number(
-        TUNE.SURFACE_WET_HOLD_START_FRAC || 0.035
+        TUNE.SURFACE_WET_HOLD_START_FRAC || 0.05
       ),
       0,
       1
@@ -385,7 +380,7 @@ function surfaceWetHoldDryMult(surfaceStorage) {
 
   return clamp(
     1 - reduction,
-    0.06,
+    0.10,
     1
   );
 }
