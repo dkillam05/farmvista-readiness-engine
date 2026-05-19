@@ -6,12 +6,13 @@
 // Stabilized intraday drydown
 //
 // UPDATED:
-// ✅ Fixes slider value 0 being ignored
-// ✅ Uses field.soilWetness / field.drainageIndex safely
-// ✅ Faster drydown conversion from DryPwr
-// ✅ Keeps intraday stabilization
-// ✅ Adds audit values for before/add/loss/floor/after
-// ✅ Does not change storage tank size logic
+// ✅ Slower soil drydown
+// ✅ True current-day hour proration
+// ✅ Forecast days do NOT affect current readiness storage/surface
+// ✅ Slower overnight drying
+// ✅ Reduced surface-to-soil handoff
+// ✅ Surface wetness now lingers longer after repeated rain
+// ✅ Keeps audit values for before/add/loss/floor/after
 // ============================================
 
 const { calcDryingPower } = require("./drying-power");
@@ -61,10 +62,10 @@ function getDayFraction(row) {
   const hours = Number(row.hoursCount || 0);
 
   if (!Number.isFinite(hours) || hours <= 0) {
-    return 0.05;
+    return 0.03;
   }
 
-  return clamp(hours / 24, 0.05, 1);
+  return clamp(hours / 24, 0.03, 1);
 }
 
 function getIntradayScale(row, dayFraction) {
@@ -72,15 +73,45 @@ function getIntradayScale(row, dayFraction) {
     return 1;
   }
 
+  // This is only a weather-quality modifier.
+  // Actual current-day proration is handled separately by dayFraction.
   return clamp(
-    0.65 + dayFraction * 0.35,
-    0.65,
-    1
+    0.42 + dayFraction * 0.38,
+    0.42,
+    0.80
   );
 }
 
-const LOSS_SCALE = 0.70;
-const SURFACE_LOSS_SCALE = 1.08;
+function isForecastRow(row, todayLiveISO) {
+  if (!row) return false;
+
+  if (
+    row.isForecast === true ||
+    row.forecast === true ||
+    row.isForecastDay === true ||
+    row.rowType === "forecast" ||
+    row.sourceMode === "forecast"
+  ) {
+    return true;
+  }
+
+  const iso =
+    String(row.dateISO || "").slice(0, 10);
+
+  if (
+    todayLiveISO &&
+    iso &&
+    iso > todayLiveISO
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+// Slower than previous model.
+const LOSS_SCALE = 0.46;
+const SURFACE_LOSS_SCALE = 0.74;
 
 function runSoilModel(weatherRows, field, opts = {}) {
   if (
@@ -148,11 +179,28 @@ function runSoilModel(weatherRows, field, opts = {}) {
     surface = 0;
   }
 
+  const todayLiveRow =
+    weatherRows.find(r => r?.isTodayLive === true);
+
+  const todayLiveISO =
+    todayLiveRow?.dateISO
+      ? String(todayLiveRow.dateISO).slice(0, 10)
+      : null;
+
   const trace = [];
 
   for (const row of weatherRows) {
     const before = storage;
     const surfaceBefore = surface;
+
+    const dry =
+      calcDryingPower(row);
+
+    const rain = Number(
+      row.rainInAdj ??
+      row.rainIn ??
+      0
+    );
 
     const dayFraction =
       getDayFraction(row);
@@ -163,14 +211,137 @@ function runSoilModel(weatherRows, field, opts = {}) {
         dayFraction
       );
 
-    const dry =
-      calcDryingPower(row);
+    const forecastRow =
+      isForecastRow(row, todayLiveISO);
 
-    const rain = Number(
-      row.rainInAdj ??
-      row.rainIn ??
-      0
-    );
+    if (forecastRow) {
+      trace.push({
+        dateISO: row.dateISO,
+
+        storageBefore:
+          round(before, 4),
+
+        surfaceBefore:
+          round(surfaceBefore, 4),
+
+        storage:
+          round(storage, 3),
+
+        surface:
+          round(surface, 3),
+
+        rain:
+          round(rain, 4),
+
+        rainEff: 0,
+
+        infilMult: 0,
+        runoffFrac: 0,
+        saturation: 0,
+        dryBoost: 0,
+        saturationCollapse: 0,
+        rainIntensityPenalty: 0,
+        infilSurfacePenalty: 0,
+
+        addRain: 0,
+        surfaceAdd: 0,
+        rawSurfaceAdd: 0,
+        surfaceToSoil: 0,
+        addTotal: 0,
+
+        loss: 0,
+        surfaceLoss: 0,
+
+        afterRaw:
+          round(storage, 4),
+
+        storageFloor:
+          round(
+            surfaceDrivenStorageFloor(
+              surface,
+              factors.Smax
+            ),
+            4
+          ),
+
+        dayFraction: 0,
+        intradayScale: 0,
+
+        isTodayLive:
+          row.isTodayLive === true,
+
+        isForecast: true,
+
+        hoursCount:
+          Number(
+            row.hoursCount || 0
+          ),
+
+        dryPwr: 0,
+        weatherCore: 0,
+        atmosphere: 0,
+
+        temp:
+          round(dry.temp, 2),
+
+        tempN:
+          round(dry.tempN, 4),
+
+        wind:
+          round(dry.wind, 2),
+
+        windN:
+          round(dry.windN, 4),
+
+        rh:
+          round(dry.rh, 2),
+
+        rhN:
+          round(dry.rhN, 4),
+
+        solar:
+          round(dry.solar, 4),
+
+        solarN:
+          round(dry.solarN, 4),
+
+        vpd:
+          round(dry.vpd, 4),
+
+        vpdN:
+          round(dry.vpdN, 4),
+
+        cloud:
+          dry.cloud === null
+            ? null
+            : round(dry.cloud, 2),
+
+        cloudN:
+          round(dry.cloudN, 4),
+
+        cloudDryN:
+          round(dry.cloudDryN, 4),
+
+        et0In:
+          round(dry.et0In, 4),
+
+        et0N:
+          round(dry.et0N, 4),
+
+        raw:
+          round(dry.raw, 4),
+
+        surfacePenalty:
+          round(
+            surfacePenaltyFromStorage(
+              surface
+            ),
+            4
+          )
+      });
+
+      continue;
+    }
 
     const infil =
       dynamicInfiltration({
@@ -183,12 +354,13 @@ function runSoilModel(weatherRows, field, opts = {}) {
     const rawSurfaceAdd =
       surfaceStorageAddFromRain(rain);
 
+    // More rain remains operationally visible on the surface.
     const surfaceAdd =
       rawSurfaceAdd *
       clamp(
-        0.35 + infil.runoffFrac,
-        0.15,
-        1.25
+        0.55 + infil.runoffFrac * 0.75,
+        0.35,
+        1.35
       );
 
     surface += surfaceAdd;
@@ -206,18 +378,18 @@ function runSoilModel(weatherRows, field, opts = {}) {
       infil.infilMult;
 
     const handoffFracBase =
-      surfaceToStorageFrac(row);
+      surfaceToStorageFrac(row, dry);
 
     const handoffFrac =
       clamp(
         handoffFracBase *
           clamp(
             infil.infilMult,
-            0.15,
-            1.25
+            0.20,
+            1.00
           ),
         0,
-        1
+        0.20
       );
 
     const surfaceToSoil =
@@ -237,7 +409,11 @@ function runSoilModel(weatherRows, field, opts = {}) {
       surfaceWetHoldDryMult(surface);
 
     loss *= surfaceDryMult;
-    loss *= intradayScale;
+
+    if (row.isTodayLive === true) {
+      loss *= dayFraction;
+      loss *= intradayScale;
+    }
 
     const afterRaw =
       before + add - loss;
@@ -247,11 +423,16 @@ function runSoilModel(weatherRows, field, opts = {}) {
         dry,
         row.et0N ||
           row.et0In ||
-          0
+          0,
+        surface
       );
 
     surfaceLoss *= SURFACE_LOSS_SCALE;
-    surfaceLoss *= intradayScale;
+
+    if (row.isTodayLive === true) {
+      surfaceLoss *= dayFraction;
+      surfaceLoss *= intradayScale;
+    }
 
     surface -= surfaceLoss;
 
@@ -388,6 +569,8 @@ function runSoilModel(weatherRows, field, opts = {}) {
 
       isTodayLive:
         row.isTodayLive === true,
+
+      isForecast: false,
 
       hoursCount:
         Number(
