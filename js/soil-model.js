@@ -6,12 +6,12 @@
 // Stabilized intraday drydown
 //
 // UPDATED:
-// ✅ FIXED rolling mode replay bug
-// ✅ Rolling seed no longer replays 30-day history every run
-// ✅ Baseline mode still processes full history
-// ✅ Today uses actual completed-hours row only
+// ✅ Removed broken rolling replay skip logic
+// ✅ Full historical progression restored
 // ✅ Forecast days do NOT affect current readiness storage/surface
-// ✅ Keeps audit values for before/add/loss/floor/after
+// ✅ True current-day drydown proration
+// ✅ Keeps balanced drying behavior
+// ✅ Prevents runaway sticky wetness
 // ============================================
 
 const { calcDryingPower } = require("./drying-power");
@@ -106,53 +106,6 @@ function isForecastRow(row, todayLiveISO) {
   return false;
 }
 
-function selectRowsForRun(weatherRows, seed) {
-  if (
-    !Array.isArray(weatherRows) ||
-    !weatherRows.length
-  ) {
-    return [];
-  }
-
-  // CRITICAL:
-  // Baseline mode builds from full history.
-  // Rolling mode starts from stored state and should NOT replay history again.
-  if (seed?.mode !== "rolling") {
-    return weatherRows;
-  }
-
-  const todayIdx =
-    weatherRows.findIndex(r => r?.isTodayLive === true);
-
-  if (todayIdx >= 0) {
-    return weatherRows.slice(todayIdx);
-  }
-
-  // Fallback: if no live-today row is marked,
-  // process only the last non-forecast row plus forecast audit rows.
-  let lastRealIdx = -1;
-
-  for (let i = 0; i < weatherRows.length; i++) {
-    const r = weatherRows[i];
-    if (
-      r &&
-      r.isForecast !== true &&
-      r.forecast !== true &&
-      r.isForecastDay !== true &&
-      r.rowType !== "forecast" &&
-      r.sourceMode !== "forecast"
-    ) {
-      lastRealIdx = i;
-    }
-  }
-
-  if (lastRealIdx >= 0) {
-    return weatherRows.slice(lastRealIdx);
-  }
-
-  return weatherRows.slice(-1);
-}
-
 // Balanced tuning
 const LOSS_SCALE = 0.58;
 const SURFACE_LOSS_SCALE = 0.88;
@@ -183,13 +136,7 @@ function runSoilModel(weatherRows, field, opts = {}) {
     drainageIndex
   });
 
-  const seed = opts.seed || {};
-
-  const rowsForRun =
-    selectRowsForRun(weatherRows, seed);
-
   const last =
-    rowsForRun[rowsForRun.length - 1] ||
     weatherRows[weatherRows.length - 1];
 
   const factors = mapFactors(
@@ -197,6 +144,8 @@ function runSoilModel(weatherRows, field, opts = {}) {
     drainageIndex,
     last?.sm010
   );
+
+  const seed = opts.seed || {};
 
   let storage;
   let surface;
@@ -228,7 +177,6 @@ function runSoilModel(weatherRows, field, opts = {}) {
   }
 
   const todayLiveRow =
-    rowsForRun.find(r => r?.isTodayLive === true) ||
     weatherRows.find(r => r?.isTodayLive === true);
 
   const todayLiveISO =
@@ -238,21 +186,12 @@ function runSoilModel(weatherRows, field, opts = {}) {
 
   const trace = [];
 
-  for (const row of rowsForRun) {
+  for (const row of weatherRows) {
     const before = storage;
     const surfaceBefore = surface;
 
     const dry =
       calcDryingPower(row);
-
-    // IMPORTANT:
-    // Do NOT multiply rain by dayFraction here.
-    // The live today row should already contain rain that has actually happened so far.
-    const rain = Number(
-      row.rainInAdj ??
-      row.rainIn ??
-      0
-    );
 
     const dayFraction =
       getDayFraction(row);
@@ -265,6 +204,21 @@ function runSoilModel(weatherRows, field, opts = {}) {
 
     const forecastRow =
       isForecastRow(row, todayLiveISO);
+
+    let rain = Number(
+      row.rainInAdj ??
+      row.rainIn ??
+      0
+    );
+
+    // IMPORTANT:
+    // Current-day live rows should only
+    // represent rainfall that has occurred so far.
+    // Prevents full-day rain injection into
+    // partial-day drying calculations.
+    if (row.isTodayLive === true) {
+      rain *= dayFraction;
+    }
 
     if (forecastRow) {
       trace.push({
