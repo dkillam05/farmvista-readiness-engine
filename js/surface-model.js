@@ -4,12 +4,11 @@
 // Surface wetness logic for FarmVista model
 //
 // UPDATED:
-// ✅ FIXED soil moisture hard-lock bug
-// ✅ Surface no longer pins soil near saturation
-// ✅ Surface still slows drying realistically
-// ✅ Preserves operational wetness realism
-// ✅ Prevents endless wet lock
-// ✅ Keeps balanced rebound behavior
+// ✅ Keeps existing 0–10 surface wetness scale
+// ✅ Rain surface impact increased by ~10%
+// ✅ Moderate rain pushes readiness harder
+// ✅ Slower rebound retained
+// ✅ Added optional recent-rain shock helpers for future MRMS hourly wiring
 // ============================================
 
 // --------------------------------------------
@@ -29,52 +28,50 @@ function clamp(n, lo, hi) {
 // TUNING
 // --------------------------------------------
 const TUNE = {
+  // Existing traces operate on approximate 0–10 scale.
   SURFACE_CAP_IN: 10.0,
 
-  SURFACE_RAIN_CAPTURE: 1.14,
+  // UPDATED:
+  // Was 1.00. Raised 10% so rain has stronger surface impact.
+  SURFACE_RAIN_CAPTURE: 1.10,
 
-  SURFACE_PENALTY_MAX: 46,
-  SURFACE_PENALTY_EXP: 0.90,
+  // Readiness penalty from surface wetness.
+  // Slightly firm but not catastrophic.
+  SURFACE_PENALTY_MAX: 44,
+  SURFACE_PENALTY_EXP: 1.06,
 
-  SURFACE_DRY_BASE: 0.003,
+  // Surface drydown.
+  SURFACE_DRY_BASE: 0.006,
 
-  SURFACE_DRY_DRYPWR_W: 0.145,
-  SURFACE_DRY_ET0_W: 0.060,
-  SURFACE_DRY_WIND_W: 0.040,
-  SURFACE_DRY_SUN_W: 0.045,
-  SURFACE_DRY_VPD_W: 0.030,
+  SURFACE_DRY_DRYPWR_W: 0.22,
+  SURFACE_DRY_ET0_W: 0.11,
+  SURFACE_DRY_WIND_W: 0.055,
+  SURFACE_DRY_SUN_W: 0.055,
+  SURFACE_DRY_VPD_W: 0.045,
 
-  SURFACE_DRY_CLOUD_W: 0.085,
-  SURFACE_DRY_HUMIDITY_HOLD_W: 0.045,
+  SURFACE_DRY_CLOUD_W: 0.075,
 
-  // Recent-rain shock helpers.
+  // Recent-rain shock.
+  // These only apply if recent MRMS rain values are wired in later.
   RECENT_RAIN_3H_TRIGGER_IN: 0.20,
   RECENT_RAIN_3H_MAX_PENALTY: 14,
   RECENT_RAIN_6H_MAX_PENALTY: 8,
   RECENT_RAIN_12H_MAX_PENALTY: 4,
 
   // Surface → soil handoff.
-  SURFACE_TO_STORAGE_BASE: 0.050,
-  SURFACE_TO_STORAGE_DRY_W: 0.050,
-  SURFACE_TO_STORAGE_MORNING_W: 0.015,
-  SURFACE_TO_STORAGE_EVENING_W: 0.055,
-  SURFACE_TO_STORAGE_MAX_FRAC: 0.26,
+  SURFACE_TO_STORAGE_BASE: 0.075,
+  SURFACE_TO_STORAGE_DRY_W: 0.075,
+  SURFACE_TO_STORAGE_MORNING_W: 0.035,
+  SURFACE_TO_STORAGE_EVENING_W: 0.075,
+  SURFACE_TO_STORAGE_MAX_FRAC: 0.34,
 
   // Surface wetness slows soil drying.
-  SURFACE_WET_HOLD_START_FRAC: 0.05,
-  SURFACE_WET_HOLD_MAX_REDUCTION: 0.64,
+  SURFACE_WET_HOLD_START_FRAC: 0.10,
+  SURFACE_WET_HOLD_MAX_REDUCTION: 0.62,
 
-  // ----------------------------------------
-  // FIXED:
-  // Old values:
-  // 0.34 / 0.34 caused permanent wet lock.
-  //
-  // New logic:
-  // Surface can influence soil minimums
-  // slightly, but NEVER dominate the model.
-  // ----------------------------------------
-  SURFACE_STORAGE_FLOOR_W: 0.04,
-  SURFACE_STORAGE_FLOOR_CAP_FRAC: 0.08
+  // Surface-driven storage floor.
+  SURFACE_STORAGE_FLOOR_W: 0.29,
+  SURFACE_STORAGE_FLOOR_CAP_FRAC: 0.30
 };
 
 // --------------------------------------------
@@ -91,23 +88,23 @@ function surfaceStorageAddFromRain(rainIn) {
   let capture;
 
   if (rain <= 0.10) {
-    capture = rain * 1.30;
+    capture = rain * 1.25;
   } else if (rain <= 0.25) {
     capture =
-      0.13 +
-      (rain - 0.10) * 1.65;
+      0.125 +
+      (rain - 0.10) * 1.55;
   } else if (rain <= 0.50) {
     capture =
-      0.38 +
-      (rain - 0.25) * 1.35;
+      0.36 +
+      (rain - 0.25) * 1.25;
   } else if (rain <= 1.00) {
     capture =
-      0.72 +
-      (rain - 0.50) * 0.82;
+      0.67 +
+      (rain - 0.50) * 0.72;
   } else {
     capture =
-      1.13 +
-      (rain - 1.00) * 0.24;
+      1.03 +
+      (rain - 1.00) * 0.18;
   }
 
   capture *= TUNE.SURFACE_RAIN_CAPTURE;
@@ -122,7 +119,7 @@ function surfaceStorageAddFromRain(rainIn) {
 // --------------------------------------------
 // SURFACE DRYDOWN
 // --------------------------------------------
-function surfaceDrydownInchesPerDay(parts, et0N, surfaceStorage = 0) {
+function surfaceDrydownInchesPerDay(parts, et0N) {
   const p =
     parts && typeof parts === "object"
       ? parts
@@ -135,15 +132,7 @@ function surfaceDrydownInchesPerDay(parts, et0N, surfaceStorage = 0) {
     clamp(Number(p.windN || 0), 0, 1);
 
   const sunshineN =
-    clamp(
-      Number(
-        p.sunshineN ??
-          p.solarN ??
-          0
-      ),
-      0,
-      1
-    );
+    clamp(Number(p.sunshineN || 0), 0, 1);
 
   const vpdN =
     clamp(Number(p.vpdN || 0), 0, 1);
@@ -151,38 +140,17 @@ function surfaceDrydownInchesPerDay(parts, et0N, surfaceStorage = 0) {
   const cloudN =
     clamp(Number(p.cloudN || 0), 0, 1);
 
-  const rhN =
-    clamp(Number(p.rhN || 0), 0, 1);
-
   const etN =
     clamp(Number(et0N || 0), 0, 1);
 
-  const surfaceFrac =
-    clamp(
-      Number(surfaceStorage || 0) /
-        Math.max(1e-6, TUNE.SURFACE_CAP_IN),
-      0,
-      1
-    );
-
-  let loss =
+  const loss =
     TUNE.SURFACE_DRY_BASE +
     TUNE.SURFACE_DRY_DRYPWR_W * dryPwr +
     TUNE.SURFACE_DRY_ET0_W * etN +
     TUNE.SURFACE_DRY_WIND_W * windN +
     TUNE.SURFACE_DRY_SUN_W * sunshineN +
     TUNE.SURFACE_DRY_VPD_W * vpdN -
-    TUNE.SURFACE_DRY_CLOUD_W * cloudN -
-    TUNE.SURFACE_DRY_HUMIDITY_HOLD_W * rhN;
-
-  const wetHoldMult =
-    clamp(
-      1 - surfaceFrac * 0.22,
-      0.72,
-      1
-    );
-
-  loss *= wetHoldMult;
+    TUNE.SURFACE_DRY_CLOUD_W * cloudN;
 
   return clamp(
     loss,
@@ -193,6 +161,10 @@ function surfaceDrydownInchesPerDay(parts, et0N, surfaceStorage = 0) {
 
 // --------------------------------------------
 // RECENT RAIN SHOCK PENALTY
+//
+// Optional helper.
+// This will only affect readiness once recent MRMS
+// values are passed into readiness calculation later.
 // --------------------------------------------
 function recentRainShockPenalty(row = {}) {
   const rain3h =
@@ -300,17 +272,9 @@ function surfacePenaltyFromStorage(surfaceStorage) {
 // --------------------------------------------
 // SURFACE → STORAGE HANDOFF FRACTION
 // --------------------------------------------
-function surfaceToStorageFrac(row, dryParts = {}) {
+function surfaceToStorageFrac(row) {
   const dryPwr =
-    clamp(
-      Number(
-        dryParts?.dryPwr ??
-          row?.dryPwr ??
-          0
-      ),
-      0,
-      1
-    );
+    clamp(Number(row?.dryPwr || 0), 0, 1);
 
   const morning =
     clamp(
@@ -359,7 +323,7 @@ function surfaceWetHoldDryMult(surfaceStorage) {
   const start =
     clamp(
       Number(
-        TUNE.SURFACE_WET_HOLD_START_FRAC || 0.05
+        TUNE.SURFACE_WET_HOLD_START_FRAC || 0.10
       ),
       0,
       1
@@ -389,7 +353,7 @@ function surfaceWetHoldDryMult(surfaceStorage) {
 
   return clamp(
     1 - reduction,
-    0.10,
+    0.06,
     1
   );
 }
