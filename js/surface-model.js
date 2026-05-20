@@ -1,39 +1,44 @@
 // ============================================
-// FILE: /js/soil-model.js
+// FILE: /js/surface-model.js
 // PURPOSE:
-// FULL model loop (WITH SEED SUPPORT)
-// Dynamic infiltration wired in
-// Stabilized intraday drydown
+// Surface wetness logic for FarmVista model
 //
 // UPDATED:
-// ✅ Tuned ~15% wetter overall behavior
-// ✅ Slightly slower soil drying
-// ✅ Slightly more rain retention
-// ✅ Slightly stronger surface carryover
-// ✅ Keeps realistic operational recovery
-// ✅ Preserves intraday stabilization
-// ✅ MASTER_SOIL_WETNESS_ADJUST control retained
-// ✅ NEW: Larger rains now leave stronger surface wetness carryover
+// ✅ FIXED solar drying contribution bug
+// ✅ Faster surface drydown after rain
+// ✅ Surface clears more realistically in 2–4 days
+// ✅ Soil moisture remains long-term limiter
+// ✅ Reduced excessive surface-driven soil floor
+// ✅ Preserves operational wetness behavior
+// ✅ NEW: Tuned ~15% wetter overall behavior
+// ✅ NEW: MASTER_WETNESS_ADJUST control added
+//
+// MASTER_WETNESS_ADJUST:
+// 0    = exact current behavior
+// +10  = slightly wetter
+// +25  = noticeably wetter
+// +50  = very wet/sticky
+// -10  = slightly drier
+// -25  = much faster drying
+//
+// IMPORTANT:
+// Positive values:
+// - increase rain capture
+// - reduce drying speed
+// - increase wet hold
+// - increase surface carryover
+//
+// Negative values do the opposite.
 // ============================================
 
 // --------------------------------------------
-// MASTER SOIL WETNESS ADJUST
+// MASTER WETNESS ADJUST
 // --------------------------------------------
-const MASTER_SOIL_WETNESS_ADJUST = 0;
+const MASTER_WETNESS_ADJUST = 20;
 
-const { calcDryingPower } = require("./drying-power");
-const { mapFactors, dynamicInfiltration } = require("./infiltration");
-const { effectiveRainInches } = require("./rain-effective");
-
-const {
-  surfaceStorageAddFromRain,
-  surfaceDrydownInchesPerDay,
-  surfacePenaltyFromStorage,
-  surfaceToStorageFrac,
-  surfaceWetHoldDryMult,
-  surfaceDrivenStorageFloor
-} = require("./surface-model");
-
+// --------------------------------------------
+// HELPERS
+// --------------------------------------------
 function clamp(n, lo, hi) {
   n = Number(n);
 
@@ -52,521 +57,453 @@ function wetAdjust(
   return base * (
     1 +
     (
-      (MASTER_SOIL_WETNESS_ADJUST / 100) *
+      (MASTER_WETNESS_ADJUST / 100) *
       pct *
       dir
     )
   );
 }
 
-function round(v, d = 2) {
-  const p = Math.pow(10, d);
+// --------------------------------------------
+// TUNING
+// --------------------------------------------
+const TUNE = {
 
-  return Math.round(Number(v) * p) / p;
-}
+  // Existing traces operate on approximate 0–10 scale.
+  SURFACE_CAP_IN: 10.0,
 
-function readFieldNumber(field, key, fallback) {
-  const n = Number(field?.[key]);
+  // --------------------------------------------
+  // WETTER TUNING
+  //
+  // Increased from 1.10 → 1.18
+  // ~7% more rain capture
+  // --------------------------------------------
+  SURFACE_RAIN_CAPTURE:
+    wetAdjust(1.18, 0.35, 1),
 
-  if (Number.isFinite(n)) {
-    return n;
+  // Slightly stronger readiness penalty.
+  SURFACE_PENALTY_MAX:
+    wetAdjust(47, 0.20, 1),
+
+  SURFACE_PENALTY_EXP: 1.06,
+
+  // --------------------------------------------
+  // SURFACE DRYDOWN
+  //
+  // Reduced drying speed ~10–15%
+  // while still allowing realistic recovery.
+  // --------------------------------------------
+  SURFACE_DRY_BASE:
+    wetAdjust(0.026, 0.40, -1),
+
+  SURFACE_DRY_DRYPWR_W:
+    wetAdjust(0.50, 0.45, -1),
+
+  SURFACE_DRY_ET0_W:
+    wetAdjust(0.14, 0.35, -1),
+
+  SURFACE_DRY_WIND_W:
+    wetAdjust(0.078, 0.35, -1),
+
+  SURFACE_DRY_SUN_W:
+    wetAdjust(0.105, 0.35, -1),
+
+  SURFACE_DRY_VPD_W:
+    wetAdjust(0.065, 0.35, -1),
+
+  SURFACE_DRY_CLOUD_W:
+    wetAdjust(0.050, 0.15, 1),
+
+  // Recent-rain shock.
+  RECENT_RAIN_3H_TRIGGER_IN: 0.20,
+  RECENT_RAIN_3H_MAX_PENALTY: 14,
+  RECENT_RAIN_6H_MAX_PENALTY: 8,
+  RECENT_RAIN_12H_MAX_PENALTY: 4,
+
+  // --------------------------------------------
+  // SURFACE → SOIL HANDOFF
+  //
+  // Slightly slower infiltration from surface
+  // into soil profile.
+  // --------------------------------------------
+  SURFACE_TO_STORAGE_BASE:
+    wetAdjust(0.065, 0.30, -1),
+
+  SURFACE_TO_STORAGE_DRY_W:
+    wetAdjust(0.065, 0.30, -1),
+
+  SURFACE_TO_STORAGE_MORNING_W:
+    wetAdjust(0.030, 0.20, -1),
+
+  SURFACE_TO_STORAGE_EVENING_W:
+    wetAdjust(0.070, 0.20, 1),
+
+  SURFACE_TO_STORAGE_MAX_FRAC:
+    wetAdjust(0.30, 0.25, -1),
+
+  // Surface wetness slows soil drying.
+  SURFACE_WET_HOLD_START_FRAC:
+    wetAdjust(0.08, 0.25, -1),
+
+  SURFACE_WET_HOLD_MAX_REDUCTION:
+    wetAdjust(0.68, 0.30, 1),
+
+  // --------------------------------------------
+  // SURFACE STORAGE FLOOR
+  //
+  // Slightly wetter carryover influence.
+  // --------------------------------------------
+  SURFACE_STORAGE_FLOOR_W:
+    wetAdjust(0.19, 0.30, 1),
+
+  SURFACE_STORAGE_FLOOR_CAP_FRAC:
+    wetAdjust(0.22, 0.30, 1)
+};
+
+// --------------------------------------------
+// SURFACE ADD FROM RAIN
+// --------------------------------------------
+function surfaceStorageAddFromRain(rainIn) {
+
+  const rain =
+    Math.max(0, Number(rainIn || 0));
+
+  if (!Number.isFinite(rain) || rain <= 0) {
+    return 0;
   }
 
-  return fallback;
-}
+  let capture;
 
-function getDayFraction(row) {
-  if (!row || row.isTodayLive !== true) {
-    return 1;
+  if (rain <= 0.10) {
+
+    capture = rain * 1.25;
+
+  } else if (rain <= 0.25) {
+
+    capture =
+      0.125 +
+      (rain - 0.10) * 1.55;
+
+  } else if (rain <= 0.50) {
+
+    capture =
+      0.36 +
+      (rain - 0.25) * 1.25;
+
+  } else if (rain <= 1.00) {
+
+    capture =
+      0.67 +
+      (rain - 0.50) * 0.72;
+
+  } else {
+
+    capture =
+      1.03 +
+      (rain - 1.00) * 0.18;
   }
 
-  const hours = Number(row.hoursCount || 0);
+  capture *= TUNE.SURFACE_RAIN_CAPTURE;
 
-  if (!Number.isFinite(hours) || hours <= 0) {
-    return 0.05;
-  }
-
-  return clamp(hours / 24, 0.05, 1);
+  return clamp(
+    capture,
+    0,
+    TUNE.SURFACE_CAP_IN
+  );
 }
 
-function getIntradayScale(row, dayFraction) {
-  if (!row || row.isTodayLive !== true) {
-    return 1;
+// --------------------------------------------
+// SURFACE DRYDOWN
+// --------------------------------------------
+function surfaceDrydownInchesPerDay(parts, et0N) {
+
+  const p =
+    parts && typeof parts === "object"
+      ? parts
+      : {};
+
+  const dryPwr =
+    clamp(Number(p.dryPwr || 0), 0, 1);
+
+  const windN =
+    clamp(Number(p.windN || 0), 0, 1);
+
+  const sunshineN =
+    clamp(
+      Number(
+        p.sunshineN ??
+        p.solarN ??
+        0
+      ),
+      0,
+      1
+    );
+
+  const vpdN =
+    clamp(Number(p.vpdN || 0), 0, 1);
+
+  const cloudN =
+    clamp(Number(p.cloudN || 0), 0, 1);
+
+  const etN =
+    clamp(Number(et0N || 0), 0, 1);
+
+  const loss =
+    TUNE.SURFACE_DRY_BASE +
+    TUNE.SURFACE_DRY_DRYPWR_W * dryPwr +
+    TUNE.SURFACE_DRY_ET0_W * etN +
+    TUNE.SURFACE_DRY_WIND_W * windN +
+    TUNE.SURFACE_DRY_SUN_W * sunshineN +
+    TUNE.SURFACE_DRY_VPD_W * vpdN -
+    TUNE.SURFACE_DRY_CLOUD_W * cloudN;
+
+  return clamp(
+    loss,
+    0,
+    TUNE.SURFACE_CAP_IN
+  );
+}
+
+// --------------------------------------------
+// RECENT RAIN SHOCK PENALTY
+// --------------------------------------------
+function recentRainShockPenalty(row = {}) {
+
+  const rain3h =
+    clamp(
+      Number(
+        row.recentRain3hIn ??
+        row.mrmsRain3hIn ??
+        row.rainLast3hIn ??
+        0
+      ),
+      0,
+      5
+    );
+
+  const rain6h =
+    clamp(
+      Number(
+        row.recentRain6hIn ??
+        row.mrmsRain6hIn ??
+        row.rainLast6hIn ??
+        0
+      ),
+      0,
+      5
+    );
+
+  const rain12h =
+    clamp(
+      Number(
+        row.recentRain12hIn ??
+        row.mrmsRain12hIn ??
+        row.rainLast12hIn ??
+        0
+      ),
+      0,
+      5
+    );
+
+  let penalty = 0;
+
+  if (rain3h >= TUNE.RECENT_RAIN_3H_TRIGGER_IN) {
+
+    penalty += clamp(
+      (rain3h / 0.50) *
+        TUNE.RECENT_RAIN_3H_MAX_PENALTY,
+      0,
+      TUNE.RECENT_RAIN_3H_MAX_PENALTY
+    );
+  }
+
+  if (rain6h > rain3h) {
+
+    penalty += clamp(
+      ((rain6h - rain3h) / 0.50) *
+        TUNE.RECENT_RAIN_6H_MAX_PENALTY,
+      0,
+      TUNE.RECENT_RAIN_6H_MAX_PENALTY
+    );
+  }
+
+  if (rain12h > rain6h) {
+
+    penalty += clamp(
+      ((rain12h - rain6h) / 0.75) *
+        TUNE.RECENT_RAIN_12H_MAX_PENALTY,
+      0,
+      TUNE.RECENT_RAIN_12H_MAX_PENALTY
+    );
   }
 
   return clamp(
-    0.65 + dayFraction * 0.35,
-    0.65,
+    penalty,
+    0,
+    TUNE.RECENT_RAIN_3H_MAX_PENALTY +
+      TUNE.RECENT_RAIN_6H_MAX_PENALTY +
+      TUNE.RECENT_RAIN_12H_MAX_PENALTY
+  );
+}
+
+// --------------------------------------------
+// SURFACE PENALTY
+// --------------------------------------------
+function surfacePenaltyFromStorage(surfaceStorage) {
+
+  const cap =
+    Math.max(
+      1e-6,
+      Number(TUNE.SURFACE_CAP_IN || 10)
+    );
+
+  const frac =
+    clamp(
+      Number(surfaceStorage || 0) / cap,
+      0,
+      1
+    );
+
+  return clamp(
+    Math.pow(
+      frac,
+      TUNE.SURFACE_PENALTY_EXP
+    ) *
+      TUNE.SURFACE_PENALTY_MAX,
+    0,
+    TUNE.SURFACE_PENALTY_MAX
+  );
+}
+
+// --------------------------------------------
+// SURFACE → STORAGE HANDOFF FRACTION
+// --------------------------------------------
+function surfaceToStorageFrac(row) {
+
+  const dryPwr =
+    clamp(Number(row?.dryPwr || 0), 0, 1);
+
+  const morning =
+    clamp(
+      Number(row?.rainMorningShare || 0),
+      0,
+      1
+    );
+
+  const evening =
+    clamp(
+      Number(row?.rainEveningShare || 0),
+      0,
+      1
+    );
+
+  const frac =
+    TUNE.SURFACE_TO_STORAGE_BASE +
+    TUNE.SURFACE_TO_STORAGE_DRY_W * dryPwr +
+    TUNE.SURFACE_TO_STORAGE_MORNING_W * morning -
+    TUNE.SURFACE_TO_STORAGE_EVENING_W * evening;
+
+  return clamp(
+    frac,
+    0,
+    TUNE.SURFACE_TO_STORAGE_MAX_FRAC
+  );
+}
+
+// --------------------------------------------
+// SURFACE WETNESS SLOWS SOIL DRYING
+// --------------------------------------------
+function surfaceWetHoldDryMult(surfaceStorage) {
+
+  const cap =
+    Math.max(
+      1e-6,
+      Number(TUNE.SURFACE_CAP_IN || 10)
+    );
+
+  const frac =
+    clamp(
+      Number(surfaceStorage || 0) / cap,
+      0,
+      1
+    );
+
+  const start =
+    clamp(
+      Number(
+        TUNE.SURFACE_WET_HOLD_START_FRAC || 0.10
+      ),
+      0,
+      1
+    );
+
+  if (frac <= start) {
+    return 1;
+  }
+
+  const wetFrac =
+    clamp(
+      (frac - start) /
+        Math.max(1e-6, 1 - start),
+      0,
+      1
+    );
+
+  const reduction =
+    clamp(
+      wetFrac *
+        Number(
+          TUNE.SURFACE_WET_HOLD_MAX_REDUCTION || 0
+        ),
+      0,
+      0.92
+    );
+
+  return clamp(
+    1 - reduction,
+    0.06,
     1
   );
 }
 
 // --------------------------------------------
-// WETTER GLOBAL TUNING
+// SURFACE STORAGE FLOOR
 // --------------------------------------------
-const LOSS_SCALE =
-  wetAdjust(0.60, 0.45, -1);
+function surfaceDrivenStorageFloor(
+  surfaceStorage,
+  Smax
+) {
 
-const SURFACE_LOSS_SCALE =
-  wetAdjust(0.92, 0.35, -1);
+  const floorRaw =
+    Number(surfaceStorage || 0) *
+    Number(
+      TUNE.SURFACE_STORAGE_FLOOR_W || 0
+    );
 
-function runSoilModel(weatherRows, field, opts = {}) {
+  const cap =
+    Number(Smax || 0) *
+    Number(
+      TUNE.SURFACE_STORAGE_FLOOR_CAP_FRAC || 0
+    );
 
-  if (
-    !Array.isArray(weatherRows) ||
-    !weatherRows.length
-  ) {
-    return null;
-  }
-
-  const soilWetness = clamp(
-    readFieldNumber(field, "soilWetness", 50),
+  return clamp(
+    floorRaw,
     0,
-    100
+    Math.max(0, cap)
   );
-
-  const drainageIndex = clamp(
-    readFieldNumber(field, "drainageIndex", 50),
-    0,
-    100
-  );
-
-  console.log("🧪 SOIL MODEL ACTIVE VALUES:", {
-    fieldId: field?.id || field?.fieldId || null,
-    soilWetness,
-    drainageIndex,
-    MASTER_SOIL_WETNESS_ADJUST
-  });
-
-  const last =
-    weatherRows[weatherRows.length - 1];
-
-  const factors =
-    mapFactors(
-      soilWetness,
-      drainageIndex,
-      last?.sm010
-    );
-
-  const seed = opts.seed || {};
-
-  let storage;
-  let surface;
-
-  if (
-    seed.mode === "rolling" &&
-    Number.isFinite(seed.storage) &&
-    Number.isFinite(seed.surface)
-  ) {
-
-    storage = clamp(
-      seed.storage,
-      0,
-      factors.Smax
-    );
-
-    surface = clamp(
-      seed.surface,
-      0,
-      10
-    );
-
-  } else {
-
-    storage = clamp(
-      wetAdjust(
-        0.12,
-        0.25,
-        1
-      ) * factors.Smax,
-      0,
-      factors.Smax
-    );
-
-    surface = 0;
-  }
-
-  const trace = [];
-
-  for (const row of weatherRows) {
-
-    const before = storage;
-    const surfaceBefore = surface;
-
-    const dayFraction =
-      getDayFraction(row);
-
-    const intradayScale =
-      getIntradayScale(
-        row,
-        dayFraction
-      );
-
-    const dry =
-      calcDryingPower(row);
-
-    const rain = Number(
-      row.rainInAdj ??
-      row.rainIn ??
-      0
-    );
-
-    const infil =
-      dynamicInfiltration({
-        storage: before,
-        surface,
-        rain,
-        factors
-      });
-
-    const rawSurfaceAdd =
-      surfaceStorageAddFromRain(rain);
-
-    // --------------------------------------------
-    // WETTER SURFACE RESPONSE
-    //
-    // UPDATED:
-    // Larger rains now leave more surface wetness,
-    // even when infiltration is good.
-    // This helps 1"+ rains persist closer to
-    // real field conditions.
-    // --------------------------------------------
-    const rainSurfaceBoost =
-      rain >= 1.0
-        ? 0.42
-        : rain >= 0.50
-          ? 0.24
-          : rain >= 0.25
-            ? 0.12
-            : 0;
-
-    const surfaceAdd =
-      rawSurfaceAdd *
-      clamp(
-        wetAdjust(
-          0.48,
-          0.30,
-          1
-        ) + infil.runoffFrac + rainSurfaceBoost,
-        0.22,
-        1.45
-      );
-
-    surface += surfaceAdd;
-
-    const rainEff =
-      effectiveRainInches(
-        rain,
-        before,
-        factors.Smax,
-        factors
-      );
-
-    // --------------------------------------------
-    // WETTER SOIL INFILTRATION
-    // --------------------------------------------
-    const addRain =
-      rainEff *
-      infil.infilMult *
-      wetAdjust(
-        1.06,
-        0.20,
-        1
-      );
-
-    const handoffFracBase =
-      surfaceToStorageFrac(row);
-
-    const handoffFrac =
-      clamp(
-        handoffFracBase *
-          clamp(
-            infil.infilMult,
-            0.12,
-            wetAdjust(
-              1.10,
-              0.15,
-              -1
-            )
-          ),
-        0,
-        1
-      );
-
-    const surfaceToSoil =
-      surface * handoffFrac;
-
-    surface -= surfaceToSoil;
-
-    const add =
-      addRain + surfaceToSoil;
-
-    // --------------------------------------------
-    // SLOWER SOIL DRYDOWN
-    // --------------------------------------------
-    let loss =
-      Number(dry.dryPwr || 0) *
-      LOSS_SCALE *
-      factors.dryMult;
-
-    const surfaceDryMult =
-      surfaceWetHoldDryMult(surface);
-
-    loss *= surfaceDryMult;
-    loss *= intradayScale;
-
-    const afterRaw =
-      before + add - loss;
-
-    // --------------------------------------------
-    // SLOWER SURFACE DRYDOWN
-    // --------------------------------------------
-    let surfaceLoss =
-      surfaceDrydownInchesPerDay(
-        dry,
-        row.et0N ||
-          row.et0In ||
-          0
-      );
-
-    surfaceLoss *= SURFACE_LOSS_SCALE;
-    surfaceLoss *= intradayScale;
-
-    surface -= surfaceLoss;
-
-    surface = clamp(
-      surface,
-      0,
-      10
-    );
-
-    const floor =
-      surfaceDrivenStorageFloor(
-        surface,
-        factors.Smax
-      );
-
-    const after =
-      clamp(
-        afterRaw,
-        floor,
-        factors.Smax
-      );
-
-    storage = after;
-
-    const surfacePenalty =
-      surfacePenaltyFromStorage(
-        surface
-      );
-
-    trace.push({
-
-      dateISO: row.dateISO,
-
-      storageBefore:
-        round(before, 4),
-
-      surfaceBefore:
-        round(surfaceBefore, 4),
-
-      storage:
-        round(storage, 3),
-
-      surface:
-        round(surface, 3),
-
-      rain:
-        round(rain, 4),
-
-      rainEff:
-        round(rainEff, 4),
-
-      infilMult:
-        round(
-          infil.infilMult,
-          4
-        ),
-
-      runoffFrac:
-        round(
-          infil.runoffFrac,
-          4
-        ),
-
-      saturation:
-        round(
-          infil.saturation,
-          4
-        ),
-
-      dryBoost:
-        round(
-          infil.dryBoost,
-          4
-        ),
-
-      saturationCollapse:
-        round(
-          infil.saturationCollapse,
-          4
-        ),
-
-      rainIntensityPenalty:
-        round(
-          infil.rainIntensityPenalty,
-          4
-        ),
-
-      infilSurfacePenalty:
-        round(
-          infil.surfacePenalty,
-          4
-        ),
-
-      addRain:
-        round(addRain, 4),
-
-      surfaceAdd:
-        round(surfaceAdd, 4),
-
-      rawSurfaceAdd:
-        round(rawSurfaceAdd, 4),
-
-      surfaceToSoil:
-        round(
-          surfaceToSoil,
-          4
-        ),
-
-      addTotal:
-        round(add, 4),
-
-      loss:
-        round(loss, 4),
-
-      surfaceLoss:
-        round(surfaceLoss, 4),
-
-      afterRaw:
-        round(afterRaw, 4),
-
-      storageFloor:
-        round(floor, 4),
-
-      dayFraction:
-        round(
-          dayFraction,
-          4
-        ),
-
-      intradayScale:
-        round(
-          intradayScale,
-          4
-        ),
-
-      isTodayLive:
-        row.isTodayLive === true,
-
-      hoursCount:
-        Number(
-          row.hoursCount || 0
-        ),
-
-      dryPwr:
-        round(
-          dry.dryPwr,
-          4
-        ),
-
-      weatherCore:
-        round(
-          dry.weatherCore,
-          4
-        ),
-
-      atmosphere:
-        round(
-          dry.atmosphere,
-          4
-        ),
-
-      temp:
-        round(dry.temp, 2),
-
-      tempN:
-        round(dry.tempN, 4),
-
-      wind:
-        round(dry.wind, 2),
-
-      windN:
-        round(dry.windN, 4),
-
-      rh:
-        round(dry.rh, 2),
-
-      rhN:
-        round(dry.rhN, 4),
-
-      solar:
-        round(dry.solar, 4),
-
-      solarN:
-        round(dry.solarN, 4),
-
-      vpd:
-        round(dry.vpd, 4),
-
-      vpdN:
-        round(dry.vpdN, 4),
-
-      cloud:
-        dry.cloud === null
-          ? null
-          : round(dry.cloud, 2),
-
-      cloudN:
-        round(dry.cloudN, 4),
-
-      cloudDryN:
-        round(dry.cloudDryN, 4),
-
-      et0In:
-        round(dry.et0In, 4),
-
-      et0N:
-        round(dry.et0N, 4),
-
-      raw:
-        round(dry.raw, 4),
-
-      surfacePenalty:
-        round(
-          surfacePenalty,
-          4
-        )
-    });
-  }
-
-  return {
-
-    trace,
-
-    storageFinal: storage,
-
-    surfaceFinal: surface,
-
-    factors,
-
-    seedMode:
-      seed.mode ||
-      "baseline_30d"
-  };
 }
 
+// --------------------------------------------
+// EXPORT
+// --------------------------------------------
 module.exports = {
-  MASTER_SOIL_WETNESS_ADJUST,
-  runSoilModel
+  MASTER_WETNESS_ADJUST,
+  TUNE,
+  surfaceStorageAddFromRain,
+  surfaceDrydownInchesPerDay,
+  surfacePenaltyFromStorage,
+  surfaceToStorageFrac,
+  surfaceWetHoldDryMult,
+  surfaceDrivenStorageFloor,
+  recentRainShockPenalty
 };
