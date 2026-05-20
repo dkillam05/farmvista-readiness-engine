@@ -5,24 +5,32 @@
 // one final readiness result
 //
 // IMPORTANT CHANGE:
-// ✅ CURRENT readiness now ONLY uses:
+// ✅ CURRENT readiness ONLY uses:
 //    - historical rows
 //    - today's live row
 //
-// ❌ Forecast rows NO LONGER affect:
-//    - readiness
-//    - soil moisture
-//    - surface wetness
+// ✅ Forecast rows now get their OWN
+//    forecast-only soil model pass
+//    for debug + future traces.
 //
-// Forecast rows should ONLY be used later
-// by ETA / future projection logic.
+// ✅ Forecast rows NO LONGER affect:
+//    - current readiness
+//    - current soil moisture
+//    - current surface wetness
+//
+// ✅ Forecast rows NOW properly populate:
+//    - forecast dryPwr
+//    - forecast infiltration
+//    - forecast storage
+//    - forecast surface wetness
+//    - forecast debug grid values
 //
 // UPDATED:
 // ✅ Returns BOTH readiness + readinessR
 // ✅ Returns BOTH wetness + wetnessR
 // ✅ Returns storagePhysFinal
 // ✅ Returns surfaceFinal
-// ✅ Fixes quickview preview normalization
+// ✅ Fixes forecast debug rows showing zeros
 //
 // ETA UPDATE:
 // ✅ Uses etaRate.js with SAME math pipeline
@@ -173,12 +181,41 @@ function runReadinessEngine(
   }
 
   // --------------------------------------------
-  // ETA RATE
+  // FORECAST MODEL
   //
   // IMPORTANT:
-  // ETA starts from the CURRENT model state,
-  // then runs FORECAST rows only through the
-  // same soil-model + readiness pipeline.
+  // This DOES NOT affect current readiness.
+  //
+  // This ONLY exists so forecast rows
+  // have real modeled values for:
+  // - debug grids
+  // - future traces
+  // - forecast visualizations
+  // --------------------------------------------
+  let forecastModel = null;
+
+  if (forecastRows.length) {
+
+    forecastModel =
+      runSoilModel(
+        forecastRows,
+        fieldDoc,
+        {
+          seed: {
+            mode: "rolling",
+
+            storage:
+              model.storageFinal,
+
+            surface:
+              model.surfaceFinal
+          }
+        }
+      );
+  }
+
+  // --------------------------------------------
+  // ETA RATE
   // --------------------------------------------
   const eta =
     calculateEtaRate({
@@ -236,9 +273,25 @@ function runReadinessEngine(
         eta?.reason || null,
 
       drydownPointsPerHour:
-        eta?.drydownPointsPerHour ?? null
+        eta?.drydownPointsPerHour ?? null,
+
+      forecastTraceRows:
+        forecastModel?.trace?.length || 0
     }
   );
+
+  // --------------------------------------------
+  // COMBINED TRACE
+  // --------------------------------------------
+  const combinedTrace = [
+    ...(Array.isArray(model.trace)
+      ? model.trace
+      : []),
+
+    ...(Array.isArray(forecastModel?.trace)
+      ? forecastModel.trace
+      : [])
+  ];
 
   // --------------------------------------------
   // RETURN
@@ -322,19 +375,15 @@ function runReadinessEngine(
     // TRACE
     // --------------------------------------------
     trace:
-      model.trace,
+      combinedTrace,
 
-// --------------------------------------------
-// CURRENT + FORECAST ROWS
-// IMPORTANT:
-// Needed so Firestore daily debug docs
-// continue rolling future forecast days
-// forward every run.
-// --------------------------------------------
-rows: [
-  ...currentRows,
-  ...forecastRows
-],
+    // --------------------------------------------
+    // CURRENT + FORECAST ROWS
+    // --------------------------------------------
+    rows: [
+      ...currentRows,
+      ...forecastRows
+    ],
 
     // --------------------------------------------
     // DEBUG
@@ -382,11 +431,14 @@ rows: [
       etaProjectionHours:
         eta?.projectionHours ?? null,
 
+      forecastTraceRows:
+        forecastModel?.trace?.length || 0,
+
       source:
         "FarmVista modular readiness engine",
 
       modelVersion:
-        "2026-05-eta-rate-v2"
+        "2026-05-forecast-trace-fix-v1"
     }
   };
 }
