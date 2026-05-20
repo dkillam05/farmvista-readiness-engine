@@ -11,7 +11,30 @@
 // ✅ Reduced excessive surface-driven soil floor
 // ✅ Preserves operational wetness behavior
 // ✅ NEW: Tuned ~15% wetter overall behavior
+// ✅ NEW: MASTER_WETNESS_ADJUST control added
+//
+// MASTER_WETNESS_ADJUST:
+// 0    = exact current behavior
+// +10  = slightly wetter
+// +25  = noticeably wetter
+// +50  = very wet/sticky
+// -10  = slightly drier
+// -25  = much faster drying
+//
+// IMPORTANT:
+// Positive values:
+// - increase rain capture
+// - reduce drying speed
+// - increase wet hold
+// - increase surface carryover
+//
+// Negative values do the opposite.
 // ============================================
+
+// --------------------------------------------
+// MASTER WETNESS ADJUST
+// --------------------------------------------
+const MASTER_WETNESS_ADJUST = 0;
 
 // --------------------------------------------
 // HELPERS
@@ -24,6 +47,21 @@ function clamp(n, lo, hi) {
   }
 
   return Math.max(lo, Math.min(hi, n));
+}
+
+function wetAdjust(
+  base,
+  pct,
+  dir = 1
+) {
+  return base * (
+    1 +
+    (
+      (MASTER_WETNESS_ADJUST / 100) *
+      pct *
+      dir
+    )
+  );
 }
 
 // --------------------------------------------
@@ -40,10 +78,13 @@ const TUNE = {
   // Increased from 1.10 → 1.18
   // ~7% more rain capture
   // --------------------------------------------
-  SURFACE_RAIN_CAPTURE: 1.18,
+  SURFACE_RAIN_CAPTURE:
+    wetAdjust(1.18, 0.35, 1),
 
   // Slightly stronger readiness penalty.
-  SURFACE_PENALTY_MAX: 47,
+  SURFACE_PENALTY_MAX:
+    wetAdjust(47, 0.20, 1),
+
   SURFACE_PENALTY_EXP: 1.06,
 
   // --------------------------------------------
@@ -52,15 +93,26 @@ const TUNE = {
   // Reduced drying speed ~10–15%
   // while still allowing realistic recovery.
   // --------------------------------------------
-  SURFACE_DRY_BASE: 0.026,
+  SURFACE_DRY_BASE:
+    wetAdjust(0.026, 0.40, -1),
 
-  SURFACE_DRY_DRYPWR_W: 0.50,
-  SURFACE_DRY_ET0_W: 0.14,
-  SURFACE_DRY_WIND_W: 0.078,
-  SURFACE_DRY_SUN_W: 0.105,
-  SURFACE_DRY_VPD_W: 0.065,
+  SURFACE_DRY_DRYPWR_W:
+    wetAdjust(0.50, 0.45, -1),
 
-  SURFACE_DRY_CLOUD_W: 0.050,
+  SURFACE_DRY_ET0_W:
+    wetAdjust(0.14, 0.35, -1),
+
+  SURFACE_DRY_WIND_W:
+    wetAdjust(0.078, 0.35, -1),
+
+  SURFACE_DRY_SUN_W:
+    wetAdjust(0.105, 0.35, -1),
+
+  SURFACE_DRY_VPD_W:
+    wetAdjust(0.065, 0.35, -1),
+
+  SURFACE_DRY_CLOUD_W:
+    wetAdjust(0.050, 0.15, 1),
 
   // Recent-rain shock.
   RECENT_RAIN_3H_TRIGGER_IN: 0.20,
@@ -74,23 +126,38 @@ const TUNE = {
   // Slightly slower infiltration from surface
   // into soil profile.
   // --------------------------------------------
-  SURFACE_TO_STORAGE_BASE: 0.065,
-  SURFACE_TO_STORAGE_DRY_W: 0.065,
-  SURFACE_TO_STORAGE_MORNING_W: 0.030,
-  SURFACE_TO_STORAGE_EVENING_W: 0.070,
-  SURFACE_TO_STORAGE_MAX_FRAC: 0.30,
+  SURFACE_TO_STORAGE_BASE:
+    wetAdjust(0.065, 0.30, -1),
+
+  SURFACE_TO_STORAGE_DRY_W:
+    wetAdjust(0.065, 0.30, -1),
+
+  SURFACE_TO_STORAGE_MORNING_W:
+    wetAdjust(0.030, 0.20, -1),
+
+  SURFACE_TO_STORAGE_EVENING_W:
+    wetAdjust(0.070, 0.20, 1),
+
+  SURFACE_TO_STORAGE_MAX_FRAC:
+    wetAdjust(0.30, 0.25, -1),
 
   // Surface wetness slows soil drying.
-  SURFACE_WET_HOLD_START_FRAC: 0.08,
-  SURFACE_WET_HOLD_MAX_REDUCTION: 0.68,
+  SURFACE_WET_HOLD_START_FRAC:
+    wetAdjust(0.08, 0.25, -1),
+
+  SURFACE_WET_HOLD_MAX_REDUCTION:
+    wetAdjust(0.68, 0.30, 1),
 
   // --------------------------------------------
   // SURFACE STORAGE FLOOR
   //
   // Slightly wetter carryover influence.
   // --------------------------------------------
-  SURFACE_STORAGE_FLOOR_W: 0.19,
-  SURFACE_STORAGE_FLOOR_CAP_FRAC: 0.22
+  SURFACE_STORAGE_FLOOR_W:
+    wetAdjust(0.19, 0.30, 1),
+
+  SURFACE_STORAGE_FLOOR_CAP_FRAC:
+    wetAdjust(0.22, 0.30, 1)
 };
 
 // --------------------------------------------
@@ -430,6 +497,7 @@ function surfaceDrivenStorageFloor(
 // EXPORT
 // --------------------------------------------
 module.exports = {
+  MASTER_WETNESS_ADJUST,
   TUNE,
   surfaceStorageAddFromRain,
   surfaceDrydownInchesPerDay,
