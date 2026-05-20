@@ -4,12 +4,15 @@
 // Dynamic infiltration + holding/drainage factors
 // for FarmVista readiness model
 //
-// UPDATED:
-// ✅ Balanced infiltration realism
-// ✅ Prevents instant drying
-// ✅ Prevents permanent wet lock
-// ✅ Better repeated-rain handling
-// ✅ Keeps 0 = dry/well-drained and 100 = wet/poorly-drained logic
+// SLIDER MEANING:
+// ✅ soilWetness:   0 = dry/light soil, 100 = wet/heavy holding soil
+// ✅ drainageIndex: 0 = well-drained, 100 = poorly drained
+//
+// FIXED:
+// ✅ Higher soilWetness now dries SLOWER
+// ✅ Higher drainageIndex now dries SLOWER
+// ✅ 0/0 now behaves like dry, well-drained ground
+// ✅ 100/100 now behaves like wet, poorly drained ground
 // ============================================
 
 // --------------------------------------------
@@ -56,6 +59,7 @@ function round(v, d = 4) {
 
 // --------------------------------------------
 // BASE FIELD FACTORS
+// STATIC FIELD CHARACTERISTICS
 // --------------------------------------------
 function mapFactors(
   soilWetness0_100,
@@ -83,39 +87,55 @@ function mapFactors(
           1
         );
 
-  // Higher number = more drydown per day.
-  // Balanced so dry fields can recover but wet/poor fields still hold.
+  // --------------------------------------------
+  // DRYING MULTIPLIER
+  //
+  // IMPORTANT:
+  // Higher number = MORE drydown per day.
+  //
+  // 0/0 = dry + well drained = dries fastest
+  // 100/100 = wet + poor drainage = dries slowest
+  // --------------------------------------------
   const dryMult =
     clamp(
-      1.22 -
-        0.36 * soilHold -
-        0.44 * drainPoor,
-      0.34,
-      1.22
+      1.45 -
+        0.45 * soilHold -
+        0.55 * drainPoor,
+      0.35,
+      1.45
     );
 
-  // Storage capacity still increases with heavier/wetter soils.
+  // --------------------------------------------
+  // STORAGE CAPACITY
+  //
+  // 0/0 = low holding capacity
+  // 100/100 = high holding capacity
+  // --------------------------------------------
   const SmaxBase =
-    2.3 +
-      1.55 * soilHold +
-      1.7 * drainPoor;
+    2.2 +
+      1.6 * soilHold +
+      1.8 * drainPoor;
 
   const Smax =
     clamp(
       SmaxBase,
-      2.3,
+      2.2,
       5.6
     );
 
-  // Balanced infiltration baseline.
-  // Higher than the sticky version, lower than the original fast-dry version.
+  // --------------------------------------------
+  // BASE INFILTRATION
+  //
+  // 0/0 = aggressive infiltration
+  // 100/100 = slower infiltration
+  // --------------------------------------------
   const infilBase =
     clamp(
-      1.08 -
-        0.30 * soilHold -
-        0.38 * drainPoor,
-      0.32,
-      1.08
+      1.35 -
+        0.45 * soilHold -
+        0.50 * drainPoor,
+      0.30,
+      1.35
     );
 
   console.log("🧪 MAP FACTORS:", {
@@ -158,7 +178,7 @@ function dynamicInfiltration({
     Number(factors.Smax || 4);
 
   const infilBase =
-    Number(factors.infilBase || 0.9);
+    Number(factors.infilBase || 1);
 
   const soilHold =
     Number(factors.soilHold || 0);
@@ -171,49 +191,29 @@ function dynamicInfiltration({
       ? clamp(storage / Smax, 0, 1.25)
       : 0;
 
-  const surfaceN =
-    clamp(Number(surface || 0) / 1.5, 0, 1);
-
-  // Still suppresses infiltration when surface is wet,
-  // but not enough to trap surface water for days.
   const surfacePenalty =
-    clamp(
-      surfaceN *
-        (0.18 + 0.16 * drainPoor),
-      0,
-      0.40
-    );
+    clamp(surface / 2.5, 0, 0.75);
 
-  // Balanced saturation collapse.
   const saturationCollapse =
     Math.pow(
-      clamp(sat, 0, 1),
-      1.15 + 0.65 * drainPoor
-    ) *
-    (0.34 + 0.22 * drainPoor);
-
-  // Restored some dry boost so fields can recover normally.
-  const dryBoost =
-    (1 - clamp(sat, 0, 1)) *
-    (
-      0.24 +
-      0.14 * (1 - soilHold) +
-      0.10 * (1 - drainPoor)
+      sat,
+      1.35 + 0.9 * drainPoor
     );
 
-  // Moderate rains into already moist soil retain more surface water,
-  // but this is less severe than the sticky version.
+  const dryBoost =
+    (1 - sat) *
+    (
+      0.45 +
+      0.25 * (1 - soilHold) +
+      0.20 * (1 - drainPoor)
+    );
+
   const rainIntensityPenalty =
     clamp(
-      rain / 1.4,
+      rain / 2.5,
       0,
-      0.32
-    ) *
-    clamp(
-      0.30 + sat + 0.35 * drainPoor,
-      0,
-      1.10
-    );
+      0.45
+    ) * sat;
 
   let infilMult =
     infilBase +
@@ -224,14 +224,14 @@ function dynamicInfiltration({
 
   infilMult = clamp(
     infilMult,
-    0.12,
-    1.15
+    0.05,
+    1.35
   );
 
   const runoffFrac =
     clamp(
       1 - infilMult,
-      0.04,
+      0,
       0.95
     );
 
