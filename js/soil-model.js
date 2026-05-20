@@ -35,7 +35,7 @@
 // --------------------------------------------
 // MASTER SOIL WETNESS ADJUST
 // --------------------------------------------
-const MASTER_SOIL_WETNESS_ADJUST = 0;
+const MASTER_SOIL_WETNESS_ADJUST = 15;
 
 // --------------------------------------------
 // HELPERS
