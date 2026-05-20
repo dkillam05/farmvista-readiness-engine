@@ -12,21 +12,34 @@
 // ✅ Slightly stronger surface carryover
 // ✅ Keeps realistic operational recovery
 // ✅ Preserves intraday stabilization
+// ✅ NEW: MASTER_SOIL_WETNESS_ADJUST control added
+//
+// MASTER_SOIL_WETNESS_ADJUST:
+// 0    = exact current behavior
+// +10  = slightly wetter
+// +25  = noticeably wetter
+// +50  = very wet/sticky
+// -10  = slightly drier
+// -25  = much faster drying
+//
+// IMPORTANT:
+// Positive values:
+// - reduce soil drydown
+// - increase rain retention
+// - increase surface carryover
+// - slightly increase infiltration retention
+//
+// Negative values do the opposite.
 // ============================================
 
-const { calcDryingPower } = require("./drying-power");
-const { mapFactors, dynamicInfiltration } = require("./infiltration");
-const { effectiveRainInches } = require("./rain-effective");
+// --------------------------------------------
+// MASTER SOIL WETNESS ADJUST
+// --------------------------------------------
+const MASTER_SOIL_WETNESS_ADJUST = 0;
 
-const {
-  surfaceStorageAddFromRain,
-  surfaceDrydownInchesPerDay,
-  surfacePenaltyFromStorage,
-  surfaceToStorageFrac,
-  surfaceWetHoldDryMult,
-  surfaceDrivenStorageFloor
-} = require("./surface-model");
-
+// --------------------------------------------
+// HELPERS
+// --------------------------------------------
 function clamp(n, lo, hi) {
   n = Number(n);
 
@@ -35,6 +48,21 @@ function clamp(n, lo, hi) {
   }
 
   return Math.max(lo, Math.min(hi, n));
+}
+
+function wetAdjust(
+  base,
+  pct,
+  dir = 1
+) {
+  return base * (
+    1 +
+    (
+      (MASTER_SOIL_WETNESS_ADJUST / 100) *
+      pct *
+      dir
+    )
+  );
 }
 
 function round(v, d = 2) {
@@ -82,8 +110,11 @@ function getIntradayScale(row, dayFraction) {
 // --------------------------------------------
 // WETTER GLOBAL TUNING
 // --------------------------------------------
-const LOSS_SCALE = 0.60;
-const SURFACE_LOSS_SCALE = 0.92;
+const LOSS_SCALE =
+  wetAdjust(0.60, 0.45, -1);
+
+const SURFACE_LOSS_SCALE =
+  wetAdjust(0.92, 0.35, -1);
 
 function runSoilModel(weatherRows, field, opts = {}) {
 
@@ -109,7 +140,8 @@ function runSoilModel(weatherRows, field, opts = {}) {
   console.log("🧪 SOIL MODEL ACTIVE VALUES:", {
     fieldId: field?.id || field?.fieldId || null,
     soilWetness,
-    drainageIndex
+    drainageIndex,
+    MASTER_SOIL_WETNESS_ADJUST
   });
 
   const last =
@@ -148,7 +180,11 @@ function runSoilModel(weatherRows, field, opts = {}) {
   } else {
 
     storage = clamp(
-      0.12 * factors.Smax,
+      wetAdjust(
+        0.12,
+        0.25,
+        1
+      ) * factors.Smax,
       0,
       factors.Smax
     );
@@ -198,7 +234,11 @@ function runSoilModel(weatherRows, field, opts = {}) {
     const surfaceAdd =
       rawSurfaceAdd *
       clamp(
-        0.48 + infil.runoffFrac,
+        wetAdjust(
+          0.48,
+          0.30,
+          1
+        ) + infil.runoffFrac,
         0.22,
         1.35
       );
@@ -219,7 +259,11 @@ function runSoilModel(weatherRows, field, opts = {}) {
     const addRain =
       rainEff *
       infil.infilMult *
-      1.06;
+      wetAdjust(
+        1.06,
+        0.20,
+        1
+      );
 
     const handoffFracBase =
       surfaceToStorageFrac(row);
@@ -230,7 +274,11 @@ function runSoilModel(weatherRows, field, opts = {}) {
           clamp(
             infil.infilMult,
             0.12,
-            1.10
+            wetAdjust(
+              1.10,
+              0.15,
+              -1
+            )
           ),
         0,
         1
@@ -510,5 +558,6 @@ function runSoilModel(weatherRows, field, opts = {}) {
 }
 
 module.exports = {
+  MASTER_SOIL_WETNESS_ADJUST,
   runSoilModel
 };
