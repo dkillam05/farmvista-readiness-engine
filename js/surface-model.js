@@ -4,11 +4,12 @@
 // Surface wetness logic for FarmVista model
 //
 // UPDATED:
-// ✅ Balanced surface persistence
-// ✅ Better operational realism
-// ✅ Prevents sticky endless wetness
-// ✅ Prevents instant rebound
-// ✅ Keeps 0–10 surface wetness scale
+// ✅ FIXED soil moisture hard-lock bug
+// ✅ Surface no longer pins soil near saturation
+// ✅ Surface still slows drying realistically
+// ✅ Preserves operational wetness realism
+// ✅ Prevents endless wet lock
+// ✅ Keeps balanced rebound behavior
 // ============================================
 
 // --------------------------------------------
@@ -63,9 +64,17 @@ const TUNE = {
   SURFACE_WET_HOLD_START_FRAC: 0.05,
   SURFACE_WET_HOLD_MAX_REDUCTION: 0.64,
 
-  // Surface-driven storage floor.
-  SURFACE_STORAGE_FLOOR_W: 0.34,
-  SURFACE_STORAGE_FLOOR_CAP_FRAC: 0.34
+  // ----------------------------------------
+  // FIXED:
+  // Old values:
+  // 0.34 / 0.34 caused permanent wet lock.
+  //
+  // New logic:
+  // Surface can influence soil minimums
+  // slightly, but NEVER dominate the model.
+  // ----------------------------------------
+  SURFACE_STORAGE_FLOOR_W: 0.04,
+  SURFACE_STORAGE_FLOOR_CAP_FRAC: 0.08
 };
 
 // --------------------------------------------
