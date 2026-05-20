@@ -10,6 +10,7 @@
 // ✅ Soil moisture remains long-term limiter
 // ✅ Reduced excessive surface-driven soil floor
 // ✅ Preserves operational wetness behavior
+// ✅ NEW: Tuned ~15% wetter overall behavior
 // ============================================
 
 // --------------------------------------------
@@ -33,35 +34,33 @@ const TUNE = {
   // Existing traces operate on approximate 0–10 scale.
   SURFACE_CAP_IN: 10.0,
 
-  // Rain capture.
-  // Keeps moderate/heavy rains impactful.
-  SURFACE_RAIN_CAPTURE: 1.10,
+  // --------------------------------------------
+  // WETTER TUNING
+  //
+  // Increased from 1.10 → 1.18
+  // ~7% more rain capture
+  // --------------------------------------------
+  SURFACE_RAIN_CAPTURE: 1.18,
 
-  // Readiness penalty from surface wetness.
-  SURFACE_PENALTY_MAX: 44,
+  // Slightly stronger readiness penalty.
+  SURFACE_PENALTY_MAX: 47,
   SURFACE_PENALTY_EXP: 1.06,
 
   // --------------------------------------------
   // SURFACE DRYDOWN
   //
-  // UPDATED:
-  // Surface water should disappear much faster
-  // than soil moisture.
-  //
-  // Goal:
-  // - 2–4 drying days removes most surface wetness
-  // - Hot/windy/sunny days clear aggressively
-  // - Humid/cloudy days still slow recovery
+  // Reduced drying speed ~10–15%
+  // while still allowing realistic recovery.
   // --------------------------------------------
-  SURFACE_DRY_BASE: 0.030,
+  SURFACE_DRY_BASE: 0.026,
 
-  SURFACE_DRY_DRYPWR_W: 0.58,
-  SURFACE_DRY_ET0_W: 0.16,
-  SURFACE_DRY_WIND_W: 0.090,
-  SURFACE_DRY_SUN_W: 0.120,
-  SURFACE_DRY_VPD_W: 0.075,
+  SURFACE_DRY_DRYPWR_W: 0.50,
+  SURFACE_DRY_ET0_W: 0.14,
+  SURFACE_DRY_WIND_W: 0.078,
+  SURFACE_DRY_SUN_W: 0.105,
+  SURFACE_DRY_VPD_W: 0.065,
 
-  SURFACE_DRY_CLOUD_W: 0.045,
+  SURFACE_DRY_CLOUD_W: 0.050,
 
   // Recent-rain shock.
   RECENT_RAIN_3H_TRIGGER_IN: 0.20,
@@ -69,27 +68,29 @@ const TUNE = {
   RECENT_RAIN_6H_MAX_PENALTY: 8,
   RECENT_RAIN_12H_MAX_PENALTY: 4,
 
-  // Surface → soil handoff.
-  SURFACE_TO_STORAGE_BASE: 0.075,
-  SURFACE_TO_STORAGE_DRY_W: 0.075,
-  SURFACE_TO_STORAGE_MORNING_W: 0.035,
-  SURFACE_TO_STORAGE_EVENING_W: 0.075,
-  SURFACE_TO_STORAGE_MAX_FRAC: 0.34,
+  // --------------------------------------------
+  // SURFACE → SOIL HANDOFF
+  //
+  // Slightly slower infiltration from surface
+  // into soil profile.
+  // --------------------------------------------
+  SURFACE_TO_STORAGE_BASE: 0.065,
+  SURFACE_TO_STORAGE_DRY_W: 0.065,
+  SURFACE_TO_STORAGE_MORNING_W: 0.030,
+  SURFACE_TO_STORAGE_EVENING_W: 0.070,
+  SURFACE_TO_STORAGE_MAX_FRAC: 0.30,
 
   // Surface wetness slows soil drying.
-  SURFACE_WET_HOLD_START_FRAC: 0.10,
-  SURFACE_WET_HOLD_MAX_REDUCTION: 0.62,
+  SURFACE_WET_HOLD_START_FRAC: 0.08,
+  SURFACE_WET_HOLD_MAX_REDUCTION: 0.68,
 
   // --------------------------------------------
   // SURFACE STORAGE FLOOR
   //
-  // UPDATED:
-  // Surface still influences soil wetness,
-  // but no longer traps the soil profile near
-  // saturation for days.
+  // Slightly wetter carryover influence.
   // --------------------------------------------
-  SURFACE_STORAGE_FLOOR_W: 0.16,
-  SURFACE_STORAGE_FLOOR_CAP_FRAC: 0.18
+  SURFACE_STORAGE_FLOOR_W: 0.19,
+  SURFACE_STORAGE_FLOOR_CAP_FRAC: 0.22
 };
 
 // --------------------------------------------
@@ -160,11 +161,6 @@ function surfaceDrydownInchesPerDay(parts, et0N) {
   const windN =
     clamp(Number(p.windN || 0), 0, 1);
 
-  // --------------------------------------------
-  // FIXED:
-  // Older code only checked sunshineN.
-  // Actual model provides solarN.
-  // --------------------------------------------
   const sunshineN =
     clamp(
       Number(
