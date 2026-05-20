@@ -6,12 +6,12 @@
 // Stabilized intraday drydown
 //
 // UPDATED:
-// ✅ Fixes slider value 0 being ignored
-// ✅ Uses field.soilWetness / field.drainageIndex safely
-// ✅ Faster drydown conversion from DryPwr
-// ✅ Keeps intraday stabilization
-// ✅ Adds audit values for before/add/loss/floor/after
-// ✅ Does not change storage tank size logic
+// ✅ Tuned ~15% wetter overall behavior
+// ✅ Slightly slower soil drying
+// ✅ Slightly more rain retention
+// ✅ Slightly stronger surface carryover
+// ✅ Keeps realistic operational recovery
+// ✅ Preserves intraday stabilization
 // ============================================
 
 const { calcDryingPower } = require("./drying-power");
@@ -79,10 +79,14 @@ function getIntradayScale(row, dayFraction) {
   );
 }
 
-const LOSS_SCALE = 0.70;
-const SURFACE_LOSS_SCALE = 1.08;
+// --------------------------------------------
+// WETTER GLOBAL TUNING
+// --------------------------------------------
+const LOSS_SCALE = 0.60;
+const SURFACE_LOSS_SCALE = 0.92;
 
 function runSoilModel(weatherRows, field, opts = {}) {
+
   if (
     !Array.isArray(weatherRows) ||
     !weatherRows.length
@@ -111,11 +115,12 @@ function runSoilModel(weatherRows, field, opts = {}) {
   const last =
     weatherRows[weatherRows.length - 1];
 
-  const factors = mapFactors(
-    soilWetness,
-    drainageIndex,
-    last?.sm010
-  );
+  const factors =
+    mapFactors(
+      soilWetness,
+      drainageIndex,
+      last?.sm010
+    );
 
   const seed = opts.seed || {};
 
@@ -127,6 +132,7 @@ function runSoilModel(weatherRows, field, opts = {}) {
     Number.isFinite(seed.storage) &&
     Number.isFinite(seed.surface)
   ) {
+
     storage = clamp(
       seed.storage,
       0,
@@ -138,9 +144,11 @@ function runSoilModel(weatherRows, field, opts = {}) {
       0,
       10
     );
+
   } else {
+
     storage = clamp(
-      0.1 * factors.Smax,
+      0.12 * factors.Smax,
       0,
       factors.Smax
     );
@@ -151,6 +159,7 @@ function runSoilModel(weatherRows, field, opts = {}) {
   const trace = [];
 
   for (const row of weatherRows) {
+
     const before = storage;
     const surfaceBefore = surface;
 
@@ -183,12 +192,15 @@ function runSoilModel(weatherRows, field, opts = {}) {
     const rawSurfaceAdd =
       surfaceStorageAddFromRain(rain);
 
+    // --------------------------------------------
+    // WETTER SURFACE RESPONSE
+    // --------------------------------------------
     const surfaceAdd =
       rawSurfaceAdd *
       clamp(
-        0.35 + infil.runoffFrac,
-        0.15,
-        1.25
+        0.48 + infil.runoffFrac,
+        0.22,
+        1.35
       );
 
     surface += surfaceAdd;
@@ -201,9 +213,13 @@ function runSoilModel(weatherRows, field, opts = {}) {
         factors
       );
 
+    // --------------------------------------------
+    // WETTER SOIL INFILTRATION
+    // --------------------------------------------
     const addRain =
       rainEff *
-      infil.infilMult;
+      infil.infilMult *
+      1.06;
 
     const handoffFracBase =
       surfaceToStorageFrac(row);
@@ -213,8 +229,8 @@ function runSoilModel(weatherRows, field, opts = {}) {
         handoffFracBase *
           clamp(
             infil.infilMult,
-            0.15,
-            1.25
+            0.12,
+            1.10
           ),
         0,
         1
@@ -228,6 +244,9 @@ function runSoilModel(weatherRows, field, opts = {}) {
     const add =
       addRain + surfaceToSoil;
 
+    // --------------------------------------------
+    // SLOWER SOIL DRYDOWN
+    // --------------------------------------------
     let loss =
       Number(dry.dryPwr || 0) *
       LOSS_SCALE *
@@ -242,6 +261,9 @@ function runSoilModel(weatherRows, field, opts = {}) {
     const afterRaw =
       before + add - loss;
 
+    // --------------------------------------------
+    // SLOWER SURFACE DRYDOWN
+    // --------------------------------------------
     let surfaceLoss =
       surfaceDrydownInchesPerDay(
         dry,
@@ -282,6 +304,7 @@ function runSoilModel(weatherRows, field, opts = {}) {
       );
 
     trace.push({
+
       dateISO: row.dateISO,
 
       storageBefore:
@@ -471,6 +494,7 @@ function runSoilModel(weatherRows, field, opts = {}) {
   }
 
   return {
+
     trace,
 
     storageFinal: storage,
