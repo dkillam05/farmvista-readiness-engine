@@ -34,7 +34,7 @@
 // --------------------------------------------
 // MASTER WETNESS ADJUST
 // --------------------------------------------
-const MASTER_WETNESS_ADJUST = 0;
+const MASTER_WETNESS_ADJUST = 20;
 
 // --------------------------------------------
 // HELPERS
