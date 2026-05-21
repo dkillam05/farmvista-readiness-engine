@@ -232,7 +232,7 @@ function calculateReadiness(
     );
 
   const surfacePenalty =
-    surfacePenaltyRaw * 1.65;
+    surfacePenaltyRaw * 1.32;
 
   // --------------------------------------------
   // RECENT RAIN SHOCK
