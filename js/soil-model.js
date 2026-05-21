@@ -9,33 +9,31 @@
 // ✅ Tuned ~15% wetter overall behavior
 // ✅ Slightly slower soil drying
 // ✅ Slightly more rain retention
-// ✅ Slightly stronger surface carryover
+// ✅ Stronger surface carryover
 // ✅ Keeps realistic operational recovery
 // ✅ Preserves intraday stabilization
-// ✅ NEW: MASTER_SOIL_WETNESS_ADJUST control added
-//
-// MASTER_SOIL_WETNESS_ADJUST:
-// 0    = exact current behavior
-// +10  = slightly wetter
-// +25  = noticeably wetter
-// +50  = very wet/sticky
-// -10  = slightly drier
-// -25  = much faster drying
-//
-// IMPORTANT:
-// Positive values:
-// - reduce soil drydown
-// - increase rain retention
-// - increase surface carryover
-// - slightly increase infiltration retention
-//
-// Negative values do the opposite.
+// ✅ MASTER_SOIL_WETNESS_ADJUST control retained
+// ✅ FIXED: Surface no longer drains into soil too fast
+// ✅ FIXED: 1"+ rains retain surface wetness longer
 // ============================================
 
 // --------------------------------------------
 // MASTER SOIL WETNESS ADJUST
 // --------------------------------------------
 const MASTER_SOIL_WETNESS_ADJUST = 15;
+
+const { calcDryingPower } = require("./drying-power");
+const { mapFactors, dynamicInfiltration } = require("./infiltration");
+const { effectiveRainInches } = require("./rain-effective");
+
+const {
+  surfaceStorageAddFromRain,
+  surfaceDrydownInchesPerDay,
+  surfacePenaltyFromStorage,
+  surfaceToStorageFrac,
+  surfaceWetHoldDryMult,
+  surfaceDrivenStorageFloor
+} = require("./surface-model");
 
 // --------------------------------------------
 // HELPERS
@@ -229,18 +227,36 @@ function runSoilModel(weatherRows, field, opts = {}) {
       surfaceStorageAddFromRain(rain);
 
     // --------------------------------------------
-    // WETTER SURFACE RESPONSE
+    // SURFACE RESPONSE
+    //
+    // Keeps larger rains on the surface longer.
     // --------------------------------------------
+    const baseSurfaceMult =
+      0.48 + infil.runoffFrac;
+
+    const rainSurfaceMult =
+      rain >= 1.50
+        ? Math.max(1.70, baseSurfaceMult)
+        : rain >= 1.00
+          ? Math.max(1.50, baseSurfaceMult)
+          : rain >= 0.75
+            ? Math.max(1.25, baseSurfaceMult)
+            : rain >= 0.50
+              ? Math.max(1.05, baseSurfaceMult)
+              : rain >= 0.25
+                ? Math.max(0.82, baseSurfaceMult)
+                : baseSurfaceMult;
+
     const surfaceAdd =
       rawSurfaceAdd *
       clamp(
         wetAdjust(
-          0.48,
+          rainSurfaceMult,
           0.30,
           1
-        ) + infil.runoffFrac,
+        ),
         0.22,
-        1.35
+        1.80
       );
 
     surface += surfaceAdd;
@@ -253,9 +269,6 @@ function runSoilModel(weatherRows, field, opts = {}) {
         factors
       );
 
-    // --------------------------------------------
-    // WETTER SOIL INFILTRATION
-    // --------------------------------------------
     const addRain =
       rainEff *
       infil.infilMult *
@@ -268,20 +281,51 @@ function runSoilModel(weatherRows, field, opts = {}) {
     const handoffFracBase =
       surfaceToStorageFrac(row);
 
+    // --------------------------------------------
+    // FIXED SURFACE → SOIL HANDOFF
+    //
+    // This was draining surface too fast.
+    // Bigger rains now slow the handoff so surface
+    // wetness can persist realistically.
+    // --------------------------------------------
+    const rainHandoffHold =
+      rain >= 1.50
+        ? 0.38
+        : rain >= 1.00
+          ? 0.48
+          : rain >= 0.75
+            ? 0.58
+            : rain >= 0.50
+              ? 0.70
+              : rain >= 0.25
+                ? 0.82
+                : 1.00;
+
+    const wetSurfaceHold =
+      surface >= 2.00
+        ? 0.62
+        : surface >= 1.00
+          ? 0.72
+          : surface >= 0.50
+            ? 0.84
+            : 1.00;
+
     const handoffFrac =
       clamp(
         handoffFracBase *
           clamp(
             infil.infilMult,
-            0.12,
+            0.08,
             wetAdjust(
-              1.10,
+              0.90,
               0.15,
               -1
             )
-          ),
+          ) *
+          rainHandoffHold *
+          wetSurfaceHold,
         0,
-        1
+        0.22
       );
 
     const surfaceToSoil =
@@ -293,7 +337,7 @@ function runSoilModel(weatherRows, field, opts = {}) {
       addRain + surfaceToSoil;
 
     // --------------------------------------------
-    // SLOWER SOIL DRYDOWN
+    // SOIL DRYDOWN
     // --------------------------------------------
     let loss =
       Number(dry.dryPwr || 0) *
@@ -310,7 +354,7 @@ function runSoilModel(weatherRows, field, opts = {}) {
       before + add - loss;
 
     // --------------------------------------------
-    // SLOWER SURFACE DRYDOWN
+    // SURFACE DRYDOWN
     // --------------------------------------------
     let surfaceLoss =
       surfaceDrydownInchesPerDay(
