@@ -6,15 +6,12 @@
 // Stabilized intraday drydown
 //
 // UPDATED:
-// ✅ Tuned ~15% wetter overall behavior
-// ✅ Slightly slower soil drying
-// ✅ Slightly more rain retention
-// ✅ Stronger surface carryover
-// ✅ Keeps realistic operational recovery
-// ✅ Preserves intraday stabilization
-// ✅ MASTER_SOIL_WETNESS_ADJUST control retained
-// ✅ FIXED: Surface no longer drains into soil too fast
-// ✅ FIXED: 1"+ rains retain surface wetness longer
+// ✅ Tuned surface scale DOWN substantially
+// ✅ Keeps realistic carryover behavior
+// ✅ Keeps slower operational recovery
+// ✅ Surface trace now targets ~0–4 range
+// ✅ Removed oversized 0–9 operational spikes
+// ✅ Preserves improved rain persistence logic
 // ============================================
 
 // --------------------------------------------
@@ -106,13 +103,28 @@ function getIntradayScale(row, dayFraction) {
 }
 
 // --------------------------------------------
-// WETTER GLOBAL TUNING
+// GLOBAL TUNING
 // --------------------------------------------
 const LOSS_SCALE =
   wetAdjust(0.60, 0.45, -1);
 
 const SURFACE_LOSS_SCALE =
-  wetAdjust(0.92, 0.35, -1);
+  wetAdjust(1.08, 0.35, -1);
+
+// --------------------------------------------
+// NEW SURFACE SCALING
+//
+// OLD MODEL:
+// Routine rains could push surface toward 8–9
+//
+// NEW TARGET:
+// Dry       = 0–1
+// Damp      = 1–2
+// Soft      = 2–3
+// Wet       = 3–4
+// Extreme   = 5+
+// --------------------------------------------
+const SURFACE_SCALE = 0.42;
 
 function runSoilModel(weatherRows, field, opts = {}) {
 
@@ -139,7 +151,8 @@ function runSoilModel(weatherRows, field, opts = {}) {
     fieldId: field?.id || field?.fieldId || null,
     soilWetness,
     drainageIndex,
-    MASTER_SOIL_WETNESS_ADJUST
+    MASTER_SOIL_WETNESS_ADJUST,
+    SURFACE_SCALE
   });
 
   const last =
@@ -170,7 +183,7 @@ function runSoilModel(weatherRows, field, opts = {}) {
     );
 
     surface = clamp(
-      seed.surface,
+      seed.surface * SURFACE_SCALE,
       0,
       10
     );
@@ -229,22 +242,26 @@ function runSoilModel(weatherRows, field, opts = {}) {
     // --------------------------------------------
     // SURFACE RESPONSE
     //
-    // Keeps larger rains on the surface longer.
+    // Scaled down significantly while preserving
+    // realistic operational persistence.
     // --------------------------------------------
     const baseSurfaceMult =
-      0.48 + infil.runoffFrac;
+      (
+        0.28 +
+        (infil.runoffFrac * 0.55)
+      ) * SURFACE_SCALE;
 
     const rainSurfaceMult =
       rain >= 1.50
-        ? Math.max(1.70, baseSurfaceMult)
+        ? Math.max(0.78, baseSurfaceMult)
         : rain >= 1.00
-          ? Math.max(1.50, baseSurfaceMult)
+          ? Math.max(0.68, baseSurfaceMult)
           : rain >= 0.75
-            ? Math.max(1.25, baseSurfaceMult)
+            ? Math.max(0.58, baseSurfaceMult)
             : rain >= 0.50
-              ? Math.max(1.05, baseSurfaceMult)
+              ? Math.max(0.48, baseSurfaceMult)
               : rain >= 0.25
-                ? Math.max(0.82, baseSurfaceMult)
+                ? Math.max(0.38, baseSurfaceMult)
                 : baseSurfaceMult;
 
     const surfaceAdd =
@@ -252,11 +269,11 @@ function runSoilModel(weatherRows, field, opts = {}) {
       clamp(
         wetAdjust(
           rainSurfaceMult,
-          0.30,
+          0.20,
           1
         ),
-        0.22,
-        1.80
+        0.08,
+        0.95
       );
 
     surface += surfaceAdd;
@@ -282,32 +299,31 @@ function runSoilModel(weatherRows, field, opts = {}) {
       surfaceToStorageFrac(row);
 
     // --------------------------------------------
-    // FIXED SURFACE → SOIL HANDOFF
+    // SURFACE → SOIL HANDOFF
     //
-    // This was draining surface too fast.
-    // Bigger rains now slow the handoff so surface
-    // wetness can persist realistically.
+    // Keeps operational persistence without
+    // allowing huge surface inflation.
     // --------------------------------------------
     const rainHandoffHold =
       rain >= 1.50
-        ? 0.38
+        ? 0.48
         : rain >= 1.00
-          ? 0.48
+          ? 0.58
           : rain >= 0.75
-            ? 0.58
+            ? 0.66
             : rain >= 0.50
-              ? 0.70
+              ? 0.76
               : rain >= 0.25
-                ? 0.82
+                ? 0.86
                 : 1.00;
 
     const wetSurfaceHold =
-      surface >= 2.00
-        ? 0.62
-        : surface >= 1.00
-          ? 0.72
-          : surface >= 0.50
-            ? 0.84
+      surface >= 2.50
+        ? 0.70
+        : surface >= 1.50
+          ? 0.80
+          : surface >= 0.75
+            ? 0.90
             : 1.00;
 
     const handoffFrac =
@@ -325,7 +341,7 @@ function runSoilModel(weatherRows, field, opts = {}) {
           rainHandoffHold *
           wetSurfaceHold,
         0,
-        0.22
+        0.26
       );
 
     const surfaceToSoil =
