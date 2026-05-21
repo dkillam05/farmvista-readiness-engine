@@ -9,6 +9,22 @@
 // ✅ Very recent rain now suppresses readiness harder
 // ✅ Standing-water situations handled more realistically
 // ✅ Keeps existing readiness structure intact
+// ✅ NEW: Stronger surface wetness influence
+// ✅ NEW: Surface persistence now properly impacts readiness
+//
+// IMPORTANT:
+// Surface wetness traces are now more persistent.
+//
+// Previous readiness math underweighted
+// surface wetness because the operational
+// penalty scale assumed a much larger
+// surface storage range.
+//
+// This update:
+// - strengthens surface impact
+// - increases operational realism
+// - lowers overly-high readiness scores
+// after meaningful rainfall
 // ============================================
 
 const {
@@ -20,6 +36,7 @@ const {
 // HELPERS
 // --------------------------------------------
 function clamp(n, lo, hi) {
+
   n = Number(n);
 
   if (!Number.isFinite(n)) {
@@ -30,6 +47,7 @@ function clamp(n, lo, hi) {
 }
 
 function round(v, d = 2) {
+
   const p = Math.pow(10, d);
 
   return Math.round(Number(v) * p) / p;
@@ -196,11 +214,25 @@ function calculateReadiness(
 
   // --------------------------------------------
   // SURFACE PENALTY
+  //
+  // UPDATED:
+  // Surface persistence now impacts
+  // readiness much more realistically.
+  //
+  // Previously:
+  // surface traces became believable,
+  // but readiness stayed unrealistically high.
+  //
+  // This multiplier increases operational
+  // sensitivity to wet surface conditions.
   // --------------------------------------------
-  const surfacePenalty =
+  const surfacePenaltyRaw =
     surfacePenaltyFromStorage(
       surfaceFinal
     );
+
+  const surfacePenalty =
+    surfacePenaltyRaw * 1.65;
 
   // --------------------------------------------
   // RECENT RAIN SHOCK
@@ -221,6 +253,7 @@ function calculateReadiness(
   // --------------------------------------------
   const recentRainPenalty =
     recentRainShockPenalty({
+
       recentRain3hIn:
         Number(opts.recentRain3hIn || 0),
 
@@ -253,20 +286,28 @@ function calculateReadiness(
   return {
 
     readiness,
+
     readinessR:
       Math.round(readiness),
 
     wetness,
+
     wetnessR:
       Math.round(wetness),
 
     baseReadiness,
+
     baseReadinessR:
       Math.round(baseReadiness),
 
-    surfacePenalty,
+    surfacePenalty:
+      round(surfacePenalty, 4),
+
     surfacePenaltyR:
       Math.round(surfacePenalty),
+
+    surfacePenaltyRaw:
+      round(surfacePenaltyRaw, 4),
 
     recentRainPenalty:
       round(recentRainPenalty, 4),
