@@ -20,7 +20,7 @@
 // --------------------------------------------
 // MASTER SOIL WETNESS ADJUST
 // --------------------------------------------
-const MASTER_SOIL_WETNESS_ADJUST = 15;
+const MASTER_SOIL_WETNESS_ADJUST = 0;
 
 const { calcDryingPower } = require("./drying-power");
 const { mapFactors, dynamicInfiltration } = require("./infiltration");
