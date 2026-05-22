@@ -6,12 +6,12 @@
 // Stabilized intraday drydown
 //
 // UPDATED:
-// ✅ Tuned surface scale DOWN substantially
-// ✅ Keeps realistic carryover behavior
-// ✅ Keeps slower operational recovery
-// ✅ Surface trace now targets ~0–4 range
-// ✅ Removed oversized 0–9 operational spikes
-// ✅ Preserves improved rain persistence logic
+// ✅ Keeps current readiness/drydown behavior
+// ✅ Keeps surface scale tuned down
+// ✅ Adds slider-based soil reserve floor
+// ✅ Wet/heavy fields no longer dry visually to true 0.00
+// ✅ 50/50 fields can still dry to 0.00
+// ✅ Surface remains weather/rain driven
 // ============================================
 
 // --------------------------------------------
@@ -45,11 +45,7 @@ function clamp(n, lo, hi) {
   return Math.max(lo, Math.min(hi, n));
 }
 
-function wetAdjust(
-  base,
-  pct,
-  dir = 1
-) {
+function wetAdjust(base, pct, dir = 1) {
   return base * (
     1 +
     (
@@ -103,6 +99,53 @@ function getIntradayScale(row, dayFraction) {
 }
 
 // --------------------------------------------
+// SLIDER-BASED SOIL RESERVE FLOOR
+//
+// Purpose:
+// 50/50 fields can dry to true 0.00.
+//
+// Wetter/heavier fields should retain a small
+// operational soil moisture reserve even when
+// weather has dried the field hard.
+//
+// Example:
+// soilWetness 60 + drainageIndex 60 should
+// usually hold roughly 0.4–0.8 instead of 0.00.
+// --------------------------------------------
+function sliderStorageReserveFloor(
+  soilWetness,
+  drainageIndex,
+  factors
+) {
+  const soilAbove =
+    clamp((soilWetness - 50) / 50, 0, 1);
+
+  const drainageAbove =
+    clamp((drainageIndex - 50) / 50, 0, 1);
+
+  const reserveIndex =
+    clamp(
+      soilAbove * 0.60 +
+        drainageAbove * 0.40,
+      0,
+      1
+    );
+
+  if (reserveIndex <= 0) {
+    return 0;
+  }
+
+  const Smax =
+    Number(factors?.Smax || 4);
+
+  return clamp(
+    Smax * reserveIndex * 0.68,
+    0,
+    1.35
+  );
+}
+
+// --------------------------------------------
 // GLOBAL TUNING
 // --------------------------------------------
 const LOSS_SCALE =
@@ -111,19 +154,6 @@ const LOSS_SCALE =
 const SURFACE_LOSS_SCALE =
   wetAdjust(1.08, 0.35, -1);
 
-// --------------------------------------------
-// NEW SURFACE SCALING
-//
-// OLD MODEL:
-// Routine rains could push surface toward 8–9
-//
-// NEW TARGET:
-// Dry       = 0–1
-// Damp      = 1–2
-// Soft      = 2–3
-// Wet       = 3–4
-// Extreme   = 5+
-// --------------------------------------------
 const SURFACE_SCALE = 0.42;
 
 function runSoilModel(weatherRows, field, opts = {}) {
@@ -147,14 +177,6 @@ function runSoilModel(weatherRows, field, opts = {}) {
     100
   );
 
-  console.log("🧪 SOIL MODEL ACTIVE VALUES:", {
-    fieldId: field?.id || field?.fieldId || null,
-    soilWetness,
-    drainageIndex,
-    MASTER_SOIL_WETNESS_ADJUST,
-    SURFACE_SCALE
-  });
-
   const last =
     weatherRows[weatherRows.length - 1];
 
@@ -164,6 +186,22 @@ function runSoilModel(weatherRows, field, opts = {}) {
       drainageIndex,
       last?.sm010
     );
+
+  const sliderReserveFloor =
+    sliderStorageReserveFloor(
+      soilWetness,
+      drainageIndex,
+      factors
+    );
+
+  console.log("🧪 SOIL MODEL ACTIVE VALUES:", {
+    fieldId: field?.id || field?.fieldId || null,
+    soilWetness,
+    drainageIndex,
+    MASTER_SOIL_WETNESS_ADJUST,
+    SURFACE_SCALE,
+    sliderReserveFloor
+  });
 
   const seed = opts.seed || {};
 
@@ -177,7 +215,10 @@ function runSoilModel(weatherRows, field, opts = {}) {
   ) {
 
     storage = clamp(
-      seed.storage,
+      Math.max(
+        seed.storage,
+        sliderReserveFloor
+      ),
       0,
       factors.Smax
     );
@@ -191,11 +232,14 @@ function runSoilModel(weatherRows, field, opts = {}) {
   } else {
 
     storage = clamp(
-      wetAdjust(
-        0.12,
-        0.25,
-        1
-      ) * factors.Smax,
+      Math.max(
+        wetAdjust(
+          0.12,
+          0.25,
+          1
+        ) * factors.Smax,
+        sliderReserveFloor
+      ),
       0,
       factors.Smax
     );
@@ -239,12 +283,6 @@ function runSoilModel(weatherRows, field, opts = {}) {
     const rawSurfaceAdd =
       surfaceStorageAddFromRain(rain);
 
-    // --------------------------------------------
-    // SURFACE RESPONSE
-    //
-    // Scaled down significantly while preserving
-    // realistic operational persistence.
-    // --------------------------------------------
     const baseSurfaceMult =
       (
         0.28 +
@@ -298,12 +336,6 @@ function runSoilModel(weatherRows, field, opts = {}) {
     const handoffFracBase =
       surfaceToStorageFrac(row);
 
-    // --------------------------------------------
-    // SURFACE → SOIL HANDOFF
-    //
-    // Keeps operational persistence without
-    // allowing huge surface inflation.
-    // --------------------------------------------
     const rainHandoffHold =
       rain >= 1.50
         ? 0.48
@@ -352,9 +384,6 @@ function runSoilModel(weatherRows, field, opts = {}) {
     const add =
       addRain + surfaceToSoil;
 
-    // --------------------------------------------
-    // SOIL DRYDOWN
-    // --------------------------------------------
     let loss =
       Number(dry.dryPwr || 0) *
       LOSS_SCALE *
@@ -369,9 +398,6 @@ function runSoilModel(weatherRows, field, opts = {}) {
     const afterRaw =
       before + add - loss;
 
-    // --------------------------------------------
-    // SURFACE DRYDOWN
-    // --------------------------------------------
     let surfaceLoss =
       surfaceDrydownInchesPerDay(
         dry,
@@ -391,10 +417,16 @@ function runSoilModel(weatherRows, field, opts = {}) {
       10
     );
 
-    const floor =
+    const surfaceFloor =
       surfaceDrivenStorageFloor(
         surface,
         factors.Smax
+      );
+
+    const floor =
+      Math.max(
+        surfaceFloor,
+        sliderReserveFloor
       );
 
     const after =
@@ -434,46 +466,25 @@ function runSoilModel(weatherRows, field, opts = {}) {
         round(rainEff, 4),
 
       infilMult:
-        round(
-          infil.infilMult,
-          4
-        ),
+        round(infil.infilMult, 4),
 
       runoffFrac:
-        round(
-          infil.runoffFrac,
-          4
-        ),
+        round(infil.runoffFrac, 4),
 
       saturation:
-        round(
-          infil.saturation,
-          4
-        ),
+        round(infil.saturation, 4),
 
       dryBoost:
-        round(
-          infil.dryBoost,
-          4
-        ),
+        round(infil.dryBoost, 4),
 
       saturationCollapse:
-        round(
-          infil.saturationCollapse,
-          4
-        ),
+        round(infil.saturationCollapse, 4),
 
       rainIntensityPenalty:
-        round(
-          infil.rainIntensityPenalty,
-          4
-        ),
+        round(infil.rainIntensityPenalty, 4),
 
       infilSurfacePenalty:
-        round(
-          infil.surfacePenalty,
-          4
-        ),
+        round(infil.surfacePenalty, 4),
 
       addRain:
         round(addRain, 4),
@@ -485,10 +496,7 @@ function runSoilModel(weatherRows, field, opts = {}) {
         round(rawSurfaceAdd, 4),
 
       surfaceToSoil:
-        round(
-          surfaceToSoil,
-          4
-        ),
+        round(surfaceToSoil, 4),
 
       addTotal:
         round(add, 4),
@@ -505,43 +513,32 @@ function runSoilModel(weatherRows, field, opts = {}) {
       storageFloor:
         round(floor, 4),
 
+      surfaceStorageFloor:
+        round(surfaceFloor, 4),
+
+      sliderStorageFloor:
+        round(sliderReserveFloor, 4),
+
       dayFraction:
-        round(
-          dayFraction,
-          4
-        ),
+        round(dayFraction, 4),
 
       intradayScale:
-        round(
-          intradayScale,
-          4
-        ),
+        round(intradayScale, 4),
 
       isTodayLive:
         row.isTodayLive === true,
 
       hoursCount:
-        Number(
-          row.hoursCount || 0
-        ),
+        Number(row.hoursCount || 0),
 
       dryPwr:
-        round(
-          dry.dryPwr,
-          4
-        ),
+        round(dry.dryPwr, 4),
 
       weatherCore:
-        round(
-          dry.weatherCore,
-          4
-        ),
+        round(dry.weatherCore, 4),
 
       atmosphere:
-        round(
-          dry.atmosphere,
-          4
-        ),
+        round(dry.atmosphere, 4),
 
       temp:
         round(dry.temp, 2),
@@ -594,10 +591,7 @@ function runSoilModel(weatherRows, field, opts = {}) {
         round(dry.raw, 4),
 
       surfacePenalty:
-        round(
-          surfacePenalty,
-          4
-        )
+        round(surfacePenalty, 4)
     });
   }
 
