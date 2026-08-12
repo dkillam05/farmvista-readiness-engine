@@ -214,14 +214,11 @@ function runSoilModel(weatherRows, field, opts = {}) {
     Number.isFinite(seed.surface)
   ) {
 
-    storage = clamp(
-      Math.max(
-        seed.storage,
-        sliderReserveFloor
-      ),
-      0,
-      factors.Smax
-    );
+storage = clamp(
+  seed.storage,
+  0,
+  factors.Smax
+);
 
     surface = clamp(
       seed.surface * SURFACE_SCALE,
@@ -423,11 +420,8 @@ function runSoilModel(weatherRows, field, opts = {}) {
         factors.Smax
       );
 
-    const floor =
-      Math.max(
-        surfaceFloor,
-        sliderReserveFloor
-      );
+const floor =
+  surfaceFloor;
 
     const after =
       clamp(
