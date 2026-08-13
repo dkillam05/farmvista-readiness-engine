@@ -159,10 +159,7 @@ function calculateReadiness(
   // --------------------------------------------
   // STORAGE CREDIT
   // --------------------------------------------
-  const readinessCreditIn =
-    signedCreditInchesFromSmax(
-      Smax
-    );
+const readinessCreditIn = 0;
 
   // --------------------------------------------
   // STORAGE FOR READINESS
@@ -202,15 +199,7 @@ function calculateReadiness(
   // --------------------------------------------
   // SLIDER BIAS
   // --------------------------------------------
-  const sliderBias =
-    sliderBiasPoints(factors);
-
-  baseReadiness =
-    clamp(
-      baseReadiness + sliderBias,
-      0,
-      100
-    );
+const sliderBias = 0;
 
   // --------------------------------------------
   // SURFACE PENALTY
